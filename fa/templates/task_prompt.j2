@@ -1,0 +1,70 @@
+# Execution Guidelines
+
+This is an unattended orchestration session. Never ask a human to perform follow-up actions. Operate autonomously end-to-end
+unless blocked by missing requirements, secrets, or permissions. If blocked, record the blocker in the memory file.
+
+Based on the task requirements, load necessary specification files on demand and strictly follow specifications during development.
+
+Specification index: {{ specs_dir }}/index.md
+{% if parent %}
+
+# Parent Task
+
+- ID: {{ parent.id }}
+- Slug: {{ parent.slug }}
+{% if parent.depends_on %}- Depends on: {{ parent.depends_on|join(', ') }}
+{% endif %}{% if parent.related_to %}- Related to: {{ parent.related_to|join(', ') }}
+{% endif %}- Task file: {{ parent_file }}
+- Memory files: {{ parent_memory_count }} file(s) available
+- Feedback files: {{ parent_feedback_count }} file(s) available
+{% endif %}
+
+# Task Information
+
+- ID: {{ task.id }}
+- Slug: {{ task.slug }}
+{% if task.depends_on %}- Depends on: {{ task.depends_on|join(', ') }}
+{% endif %}{% if task.related_to %}- Related to: {{ task.related_to|join(', ') }}
+{% endif %}{% if is_attempt_run %}- Attempt: {{ attempt }}
+{% endif %}- Task file: {{ task_file }}
+{% if not is_attempt_run %}
+
+## Fresh Run Instructions
+
+This is a fresh run. Re-evaluate the entire task scope and requirements. Build upon what is correct while addressing any gaps
+or issues. Do not simply apply incremental patches.
+{% else %}
+
+## Attempt Context
+
+This is retry attempt #{{ attempt }} because the task is still in an active state. Resume from the current state instead of
+restarting from scratch. Do not repeat already-completed investigation or validation.
+
+### Previous Memory Files
+
+Read previous work summaries:
+{% for memory_file in memory_files %}
+- {{ memory_file }}
+{% endfor %}
+
+### Feedback History
+{% if history_feedback_files %}
+{% for feedback_file in history_feedback_files %}
+- {{ feedback_file }}
+{% endfor %}
+{% else %}
+(None - this is your first retry)
+{% endif %}
+
+### Latest Feedback
+
+The most recent feedback that triggered this attempt:
+- {{ latest_feedback_file }}
+
+This attempt is because there is feedback indicating the task was not completed as expected. Pay extra attention to quality and
+ensure complete delivery that satisfies user expectations.
+{% endif %}
+
+# Output Instructions
+
+After completion, write your work summary to: {{ memory_output_path }}
