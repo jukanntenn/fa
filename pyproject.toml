@@ -10,5 +10,8 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[tool.setuptools.packages.find]
+include = ["fa*"]
+
 [project.scripts]
 fa = "fa.cli:main"
