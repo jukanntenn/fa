@@ -12,7 +12,6 @@ class PolicyReport:
 @dataclass
 class PolicyScopes:
     required: list[str]
-    optional: list[str]
     exclude: list[str]
 
 
@@ -25,6 +24,7 @@ class Policy:
     specs: list[str]
     scopes: PolicyScopes
     report: PolicyReport
+    agent: str = "rectifier"
 
     @classmethod
     def from_dict(cls, data: dict, fallback_id: str) -> "Policy":
@@ -35,14 +35,19 @@ class Policy:
             name=str(data.get("name", fallback_id)),
             description=str(data.get("description", "")),
             objective=str(data.get("objective", "")),
-            specs=list(data.get("specs", [])),
+            specs=list(data.get("specs") or []),
             scopes=PolicyScopes(
-                required=list(scopes.get("required", [])),
-                optional=list(scopes.get("optional", [])),
-                exclude=list(scopes.get("exclude", [])),
+                required=list(scopes.get("required") or []),
+                exclude=list(scopes.get("exclude") or []),
             ),
             report=PolicyReport(
-                path=str(report.get("path", f"./reports/policy/{fallback_id}.md")),
+                path=str(
+                    report.get(
+                        "path",
+                        ".fa/reports/{{ policy.id }}/{{ date }}_{{ time }}/round-{{ round }}.md",
+                    )
+                ),
                 template=str(report.get("template", "")),
             ),
+            agent=str(data.get("agent", "rectifier")),
         )

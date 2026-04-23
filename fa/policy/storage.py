@@ -23,12 +23,18 @@ def list_policy_files() -> list[Path]:
     return sorted(policies_dir().glob("*.yml"))
 
 
-def load_policy(policy_id: str) -> Policy:
+def load_policy(policy_id: str, context: dict | None = None) -> Policy:
     path = policy_file(policy_id)
     if not path.is_file():
         raise FileNotFoundError(f"policy {policy_id} not found")
     raw = path.read_text(encoding="utf-8")
-    rendered = Template(raw).render(project_root=str(project_root()))
+    render_ctx: dict = {
+        "project_root": str(project_root()),
+        "policy": {"id": policy_id},
+    }
+    if context:
+        render_ctx.update(context)
+    rendered = Template(raw).render(**render_ctx)
     data = yaml.safe_load(rendered) or {}
     if not isinstance(data, dict):
         raise ValueError("policy yaml must be an object")

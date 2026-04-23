@@ -1,55 +1,16 @@
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 import time
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 
 from fa.core.config import AGENT_LOGS_DIR_NAME, LOGS_DIR_NAME, TOOL_COMMANDS
+from fa.core.quota import check_glm_quota
 from fa.task.model import Task
-from fa.task.prompt import build_task_prompt
+from fa.task.prompt import build_task_prompt, infer_attempt, infer_memory_sequence
 from fa.task.storage import all_tasks, fa_dir, save_task
-
-
-def _load_settings() -> dict | None:
-    path = Path.home() / ".claude" / "settings.json"
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return None
-
-
-def check_glm_quota(logger: logging.Logger) -> bool:
-    settings = _load_settings()
-    token = (settings or {}).get("env", {}).get("ANTHROPIC_AUTH_TOKEN")
-    if not token:
-        return True
-    req = urllib.request.Request("https://open.bigmodel.cn/api/monitor/usage/quota/limit")
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            data = json.load(response)
-    except Exception as exc:
-        logger.warning("Failed to check GLM quota: %s", exc)
-        return True
-    for item in data.get("data", {}).get("limits", []):
-        if item.get("type") != "TOKENS_LIMIT":
-            continue
-        percentage = float(item.get("percentage", 0))
-        next_reset = item.get("nextResetTime")
-        if percentage < 70:
-            return True
-        if not next_reset:
-            return False
-        wait_until = int(next_reset / 1000) + 1800
-        while time.time() < wait_until:
-            time.sleep(10)
-        return True
-    return True
 
 
 def _tool_cmd(tool: str, prompt: str) -> list[str]:
@@ -82,7 +43,25 @@ def _task_log_dir(task: Task) -> Path:
     return path
 
 
-def build_execution_plan(tasks: dict[int, Task], selected_pending_ids: list[int]) -> list[int]:
+def _save_prompt(
+    log_dir: Path,
+    round_index: int,
+    attempt: int,
+    is_attempt_run: bool,
+    prompt: str,
+) -> Path:
+    if is_attempt_run and attempt > 1:
+        name = f"round-{round_index}-attempt-{attempt}-prompt.md"
+    else:
+        name = f"round-{round_index}-prompt.md"
+    path = log_dir / name
+    path.write_text(prompt, encoding="utf-8")
+    return path
+
+
+def build_execution_plan(
+    tasks: dict[int, Task], selected_pending_ids: list[int]
+) -> list[int]:
     selected_set = set(selected_pending_ids)
     children: dict[int, list[int]] = {}
     for task in tasks.values():
@@ -113,7 +92,9 @@ def build_execution_plan(tasks: dict[int, Task], selected_pending_ids: list[int]
                 appended.add(parent_id)
             parent_processed.add(parent_id)
             continue
-        selected_children = [cid for cid in children.get(task_id, []) if cid in selected_set]
+        selected_children = [
+            cid for cid in children.get(task_id, []) if cid in selected_set
+        ]
         if selected_children:
             for child_id in selected_children:
                 if child_id not in appended:
@@ -128,6 +109,10 @@ def build_execution_plan(tasks: dict[int, Task], selected_pending_ids: list[int]
             output.append(task_id)
             appended.add(task_id)
     return output
+
+
+def _count_feedback_files(task: Task) -> int:
+    return len(sorted(task.path.glob("feedback-*.md")))
 
 
 def run_tasks(
@@ -149,31 +134,71 @@ def run_tasks(
         logger.info("No pending tasks to run.")
         return 0
     plan = build_execution_plan(tasks, pending)
+    logger.info("Execution plan: %d tasks %s", len(plan), plan)
     has_failure = False
     for task_id in plan:
-        if glm_plan and not check_glm_quota(logger):
-            logger.error("GLM quota check failed")
-            has_failure = True
-            continue
         task = all_tasks().get(task_id)
         if task is None:
-            logger.error("Task %s not found", task_id)
+            logger.error("Task [%d] not found", task_id)
             has_failure = True
             continue
         parent = all_tasks().get(task.parent_id) if task.parent_id else None
         try:
-            prompt = build_task_prompt(task, parent, is_attempt_run=attempt_mode)
+            build_task_prompt(task, parent, is_attempt_run=attempt_mode)
         except FileNotFoundError:
-            logger.error("Template not found, skipping task %s", task.id)
+            logger.error(
+                'Task [%d] "%s" skipped - template not found', task.id, task.slug
+            )
             has_failure = True
             continue
         task.status = "running"
         save_task(task)
+        logger.info('Task [%d] "%s" started', task.id, task.slug)
         failed = False
         log_dir = _task_log_dir(task)
+        memory_count = infer_memory_sequence(task) - 1
+        attempt = infer_attempt(task) if attempt_mode else 1
+        feedback_count = _count_feedback_files(task) if attempt_mode else 0
+        mode = "attempt" if attempt_mode else "fresh"
         for round_index in range(1, rounds + 1):
+            if glm_plan and not check_glm_quota(logger):
+                logger.error(
+                    "Task [%d] round %d/%d skipped - GLM quota check failed",
+                    task.id,
+                    round_index,
+                    rounds,
+                )
+                failed = True
+                break
+            prompt = build_task_prompt(task, parent, is_attempt_run=attempt_mode)
+            _save_prompt(log_dir, round_index, attempt, attempt_mode, prompt)
+            logger.debug(
+                "Prompt rendered | mode=%s | attempt=%d | memory_files=%d | feedback_files=%d | chars=%d",
+                mode,
+                attempt,
+                memory_count,
+                feedback_count,
+                len(prompt),
+            )
+            logger.info(
+                "Task [%d] round %d/%d started | tool=%s",
+                task.id,
+                round_index,
+                rounds,
+                tool,
+            )
             log_path = log_dir / f"round-{round_index}-{tool}.log"
+            t0 = time.monotonic()
             code = _run_tool(tool, prompt, log_path, logger)
+            elapsed = int(time.monotonic() - t0)
+            logger.info(
+                "Task [%d] round %d/%d completed in %ds | exit_code=%d",
+                task.id,
+                round_index,
+                rounds,
+                elapsed,
+                code,
+            )
             if code != 0:
                 failed = True
                 has_failure = True
@@ -182,8 +207,10 @@ def run_tasks(
             task.status = "pending"
             task.completed_at = None
             save_task(task)
+            logger.info('Task [%d] "%s" failed - reset to pending', task.id, task.slug)
             continue
         task.status = "completed"
         task.completed_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         save_task(task)
+        logger.info('Task [%d] "%s" completed', task.id, task.slug)
     return 1 if has_failure else 0

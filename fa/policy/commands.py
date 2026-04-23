@@ -15,21 +15,30 @@ def list_policies() -> None:
 
 
 @policy_app.command("run")
-def run(policy_ids: list[str], tool: str = "iflow", rounds: int = 3) -> None:
+def run(
+    policy_ids: list[str],
+    tool: str = "iflow",
+    rounds: int = 3,
+    glm_plan: bool = False,
+) -> None:
     from fa.cli import app_state
 
     if not policy_ids:
         raise typer.Exit(code=0)
-    code = run_policies_by_ids(app_state.logger, policy_ids, tool=tool, rounds=rounds)
+    code = run_policies_by_ids(
+        app_state.logger, policy_ids, tool=tool, rounds=rounds, glm_plan=glm_plan
+    )
     if code != 0:
         raise typer.Exit(code=code)
 
 
 @policy_app.command("run-all")
-def run_all(tool: str = "iflow", rounds: int = 3) -> None:
+def run_all(tool: str = "iflow", rounds: int = 3, glm_plan: bool = False) -> None:
     from fa.cli import app_state
 
     ids = [path.stem for path in list_policy_files()]
-    code = run_policies_by_ids(app_state.logger, ids, tool=tool, rounds=rounds)
+    code = run_policies_by_ids(
+        app_state.logger, ids, tool=tool, rounds=rounds, glm_plan=glm_plan
+    )
     if code != 0:
         raise typer.Exit(code=code)

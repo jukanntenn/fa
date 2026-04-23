@@ -16,7 +16,15 @@ FA_LOG_FILE_NAME = "fa.log"
 
 TOOL_COMMANDS: dict[str, list[str]] = {
     "iflow": ["iflow", "--prompt", "{prompt}", "-y", "--debug"],
-    "kilo": ["kilo", "run", "--auto", "{prompt}", "--print-logs", "--log-level", "DEBUG"],
+    "kilo": [
+        "kilo",
+        "run",
+        "--auto",
+        "{prompt}",
+        "--print-logs",
+        "--log-level",
+        "DEBUG",
+    ],
     "claude": [
         "claude",
         "-p",
@@ -37,6 +45,16 @@ TOOL_COMMANDS: dict[str, list[str]] = {
         "{prompt}",
     ],
     "opencode": ["opencode", "run", "{prompt}", "--print-logs", "--log-level", "DEBUG"],
+    "codex": ["codex", "exec", "--full-auto", "{prompt}"],
+}
+
+TOOL_AGENT_ARG: dict[str, str] = {
+    "claude": "--agent",
+    "ccr": "--agent",
+    "iflow": "$",
+    "opencode": "--agent",
+    "kilo": "--agent",
+    "codex": "$",
 }
 
 VALID_STATUSES = {"pending", "running", "completed"}
