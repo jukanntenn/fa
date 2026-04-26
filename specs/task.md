@@ -46,7 +46,11 @@ After each round of task execution, the AI agent creates a `memory-N.md` file. T
 
 ### Task Run
 
-1. Scan pending tasks, optionally filtered by ID range
+1. Build candidate list:
+   - If `--ids` provided: parse comma-separated IDs and ranges (e.g., `--ids 1,3,5-8`)
+   - If `--ids` not provided: auto-select all tasks with status `pending`
+   - If `--attempt` is active: ignore task status (like `--force`) but skip tasks with no feedback files
+   - If `--force` is active: run tasks regardless of status (requires `--ids`)
 2. Build execution plan — group subtasks with their parent; parent always executes after subtasks
 3. User confirms the plan before execution begins
 4. For each task, run N rounds via the configured AI tool
@@ -56,7 +60,7 @@ After each round of task execution, the AI agent creates a `memory-N.md` file. T
 
 ### Parent Task Execution Rule
 
-When executing subtasks (whether all or a subset via ID range):
+When executing subtasks (whether all or a subset via `--ids`):
 
 - The parent task **always executes after** all its subtasks complete
 - Only the specified subtasks run; siblings outside the range are skipped

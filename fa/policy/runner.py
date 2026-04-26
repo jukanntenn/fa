@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import os
 import subprocess
 import time
 from datetime import datetime
@@ -18,6 +19,21 @@ from fa.core.quota import check_glm_quota
 from fa.policy.model import Policy
 from fa.policy.storage import load_policy
 from fa.task.storage import fa_dir, project_root
+
+
+def _load_dotenv(path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
+    if not path.is_file():
+        return env
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        env[key.strip()] = value.strip()
+    return env
 
 
 def _iter_files(base: Path) -> list[Path]:
@@ -82,7 +98,12 @@ def _run_tool(
     log_file: Path,
     logger: logging.Logger,
     agent: str = "rectifier",
+    extra_env: dict[str, str] | None = None,
 ) -> int:
+    if tool not in TOOL_COMMANDS:
+        raise ValueError(
+            f"unknown tool '{tool}'. Available: {', '.join(TOOL_COMMANDS.keys())}"
+        )
     arg_style = TOOL_AGENT_ARG.get(tool, "--agent")
     template = TOOL_COMMANDS[tool]
     if arg_style == "$":
@@ -95,6 +116,7 @@ def _run_tool(
                 cmd.extend([arg_style, agent])
             cmd.append(piece.format(prompt=prompt))
     logger.debug("Executing agent tool command: %s", cmd)
+    env = {**os.environ, **extra_env} if extra_env else None
     try:
         with log_file.open("w", encoding="utf-8") as handle:
             result = subprocess.run(
@@ -103,6 +125,7 @@ def _run_tool(
                 stderr=subprocess.STDOUT,
                 text=True,
                 check=False,
+                env=env,
             )
     except OSError:
         return 1
@@ -122,6 +145,13 @@ def run_policy(
     rounds: int,
     glm_plan: bool = False,
 ) -> int:
+    # Load .env from cwd for codex
+    extra_env: dict[str, str] | None = None
+    if tool == "codex":
+        dotenv = _load_dotenv(Path.cwd() / ".env")
+        if "CODEX_API_KEY" in dotenv:
+            extra_env = {"CODEX_API_KEY": dotenv["CODEX_API_KEY"]}
+
     logs_dir = fa_dir() / LOGS_DIR_NAME / AGENT_LOGS_DIR_NAME / f"policy-{policy_id}"
     logs_dir.mkdir(parents=True, exist_ok=True)
     logger.info('Policy "%s" started | rounds=%d | tool=%s', policy_id, rounds, tool)
@@ -170,7 +200,7 @@ def run_policy(
             len(files),
         )
         t0 = time.monotonic()
-        code = _run_tool(tool, prompt, log_file, logger, agent=policy.agent)
+        code = _run_tool(tool, prompt, log_file, logger, agent=policy.agent, extra_env=extra_env)
         elapsed = int(time.monotonic() - t0)
         logger.info(
             'Policy "%s" round %d/%d completed in %ds | exit_code=%d',

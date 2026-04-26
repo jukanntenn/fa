@@ -13,5 +13,8 @@ dependencies = [
 [tool.setuptools.packages.find]
 include = ["fa*"]
 
+[tool.setuptools.package-data]
+fa = ["templates/*.j2"]
+
 [project.scripts]
 fa = "fa.cli:main"

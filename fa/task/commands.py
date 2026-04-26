@@ -118,9 +118,9 @@ def archive(id_range: str) -> None:
 
 @task_app.command("run")
 def run(
-    start: int | None = typer.Option(None, "--start"),
-    end: int | None = typer.Option(None, "--end"),
-    tool: str = typer.Option("iflow", "--tool"),
+    ids: str | None = typer.Option(None, "--ids"),
+    force: bool = typer.Option(False, "--force"),
+    tool: str = typer.Option("codex", "--tool"),
     rounds: int = typer.Option(3, "--rounds"),
     policies: str | None = typer.Option(None, "--policies"),
     glm_plan: bool = typer.Option(False, "--glm-plan"),
@@ -131,19 +131,57 @@ def run(
 
     logger = app_state.logger
 
-    # Get pending tasks and build execution plan
-    tasks = all_tasks()
-    pending = sorted(task.id for task in tasks.values() if task.status == "pending")
-    if start is not None:
-        pending = [task_id for task_id in pending if task_id >= start]
-    if end is not None:
-        pending = [task_id for task_id in pending if task_id <= end]
+    # Validate flags
+    if force and ids is None:
+        typer.echo("Error: --force requires --ids to be specified", err=True)
+        raise typer.Exit(code=1)
 
-    if not pending:
-        logger.info("No pending tasks to run.")
+    # Get all tasks
+    tasks = all_tasks()
+
+    # Build candidate list
+    if ids is not None:
+        candidates = parse_id_range(ids)
+        # Validate that referenced tasks exist
+        missing = [cid for cid in candidates if cid not in tasks]
+        if missing:
+            typer.echo(
+                "Error: task(s) not found: " + ",".join(str(m) for m in missing),
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        # Non-pending tasks require --force
+        non_pending = [
+            cid for cid in candidates if tasks[cid].status != "pending"
+        ]
+        if non_pending and not force:
+            typer.echo(
+                "Error: task(s) " + ",".join(str(n) for n in non_pending)
+                + " are not pending. Use --force to override.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    elif attempt:
+        # Attempt mode without --ids: select all tasks regardless of status
+        candidates = sorted(tasks.keys())
+    else:
+        candidates = sorted(
+            task.id for task in tasks.values() if task.status == "pending"
+        )
+
+    # Apply attempt filter: skip tasks with no feedback files
+    if attempt:
+        candidates = [
+            task_id
+            for task_id in candidates
+            if task_id in tasks and list(tasks[task_id].path.glob("feedback-*.md"))
+        ]
+
+    if not candidates:
+        logger.info("No tasks to run.")
         return
 
-    plan = build_execution_plan(tasks, pending)
+    plan = build_execution_plan(tasks, candidates)
 
     # Show execution plan and confirm
     if not yes:
@@ -160,8 +198,8 @@ def run(
 
     exit_code = run_tasks(
         logger=logger,
-        start=start,
-        end=end,
+        ids=plan,
+        force=force or attempt,
         tool=tool,
         rounds=rounds,
         glm_plan=glm_plan,
@@ -170,8 +208,8 @@ def run(
     if policies:
         from fa.policy.runner import run_policies_by_ids
 
-        ids = [item.strip() for item in policies.split(",") if item.strip()]
-        policy_result = run_policies_by_ids(logger, ids, tool=tool, rounds=rounds)
+        policy_ids = [item.strip() for item in policies.split(",") if item.strip()]
+        policy_result = run_policies_by_ids(logger, policy_ids, tool=tool, rounds=rounds)
         if policy_result != 0:
             exit_code = 1
     if exit_code != 0:

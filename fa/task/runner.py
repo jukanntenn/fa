@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import time
 from datetime import datetime
@@ -13,14 +14,40 @@ from fa.task.prompt import build_task_prompt, infer_attempt, infer_memory_sequen
 from fa.task.storage import all_tasks, fa_dir, save_task
 
 
+def _load_dotenv(path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
+    if not path.is_file():
+        return env
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        env[key.strip()] = value.strip()
+    return env
+
+
 def _tool_cmd(tool: str, prompt: str) -> list[str]:
+    if tool not in TOOL_COMMANDS:
+        raise ValueError(
+            f"unknown tool '{tool}'. Available: {', '.join(TOOL_COMMANDS.keys())}"
+        )
     template = TOOL_COMMANDS[tool]
     return [part.format(prompt=prompt) for part in template]
 
 
-def _run_tool(tool: str, prompt: str, log_file: Path, logger: logging.Logger) -> int:
+def _run_tool(
+    tool: str,
+    prompt: str,
+    log_file: Path,
+    logger: logging.Logger,
+    extra_env: dict[str, str] | None = None,
+) -> int:
     cmd = _tool_cmd(tool, prompt)
     logger.debug("Executing agent tool command: %s", cmd)
+    env = {**os.environ, **extra_env} if extra_env else None
     try:
         with log_file.open("w", encoding="utf-8") as file:
             completed = subprocess.run(
@@ -29,6 +56,7 @@ def _run_tool(tool: str, prompt: str, log_file: Path, logger: logging.Logger) ->
                 stderr=subprocess.STDOUT,
                 text=True,
                 check=False,
+                env=env,
             )
     except OSError:
         return 1
@@ -117,23 +145,32 @@ def _count_feedback_files(task: Task) -> int:
 
 def run_tasks(
     logger: logging.Logger,
-    start: int | None,
-    end: int | None,
+    ids: list[int],
+    force: bool,
     tool: str,
     rounds: int,
     glm_plan: bool,
     attempt_mode: bool,
 ) -> int:
     tasks = all_tasks()
-    pending = sorted(task.id for task in tasks.values() if task.status == "pending")
-    if start is not None:
-        pending = [task_id for task_id in pending if task_id >= start]
-    if end is not None:
-        pending = [task_id for task_id in pending if task_id <= end]
-    if not pending:
-        logger.info("No pending tasks to run.")
-        return 0
-    plan = build_execution_plan(tasks, pending)
+
+    # Reset status for force/attempt mode tasks
+    if force:
+        for task_id in ids:
+            task = tasks.get(task_id)
+            if task and task.status != "pending":
+                task.status = "pending"
+                task.completed_at = None
+                save_task(task)
+
+    # Load .env from cwd for codex
+    extra_env: dict[str, str] | None = None
+    if tool == "codex":
+        dotenv = _load_dotenv(Path.cwd() / ".env")
+        if "CODEX_API_KEY" in dotenv:
+            extra_env = {"CODEX_API_KEY": dotenv["CODEX_API_KEY"]}
+
+    plan = ids
     logger.info("Execution plan: %d tasks %s", len(plan), plan)
     has_failure = False
     for task_id in plan:
@@ -189,7 +226,7 @@ def run_tasks(
             )
             log_path = log_dir / f"round-{round_index}-{tool}.log"
             t0 = time.monotonic()
-            code = _run_tool(tool, prompt, log_path, logger)
+            code = _run_tool(tool, prompt, log_path, logger, extra_env=extra_env)
             elapsed = int(time.monotonic() - t0)
             logger.info(
                 "Task [%d] round %d/%d completed in %ds | exit_code=%d",

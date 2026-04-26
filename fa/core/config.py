@@ -15,7 +15,6 @@ PROMPT_TEMPLATE_NAME = "task_prompt.j2"
 FA_LOG_FILE_NAME = "fa.log"
 
 TOOL_COMMANDS: dict[str, list[str]] = {
-    "iflow": ["iflow", "--prompt", "{prompt}", "-y", "--debug"],
     "kilo": [
         "kilo",
         "run",
@@ -51,7 +50,6 @@ TOOL_COMMANDS: dict[str, list[str]] = {
 TOOL_AGENT_ARG: dict[str, str] = {
     "claude": "--agent",
     "ccr": "--agent",
-    "iflow": "$",
     "opencode": "--agent",
     "kilo": "--agent",
     "codex": "$",

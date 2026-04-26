@@ -36,8 +36,8 @@ The tool finds project root by searching upward for:
 │   ├── fa.log                      # Tool internal logs
 │   └── agents/                     # Agent execution logs
 │       └── 1-03-25-first-task/
-│           ├── round-1-iflow.log
-│           └── round-2-iflow.log
+│           ├── round-1-codex.log
+│           └── round-2-codex.log
 ├── policies/                       # Policy definitions
 │   ├── testing.yml
 │   └── security.yml

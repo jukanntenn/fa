@@ -17,7 +17,7 @@ def list_policies() -> None:
 @policy_app.command("run")
 def run(
     policy_ids: list[str],
-    tool: str = "iflow",
+    tool: str = "codex",
     rounds: int = 3,
     glm_plan: bool = False,
 ) -> None:
@@ -33,7 +33,7 @@ def run(
 
 
 @policy_app.command("run-all")
-def run_all(tool: str = "iflow", rounds: int = 3, glm_plan: bool = False) -> None:
+def run_all(tool: str = "codex", rounds: int = 3, glm_plan: bool = False) -> None:
     from fa.cli import app_state
 
     ids = [path.stem for path in list_policy_files()]
