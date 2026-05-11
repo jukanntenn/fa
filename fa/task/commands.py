@@ -171,9 +171,6 @@ def run(
     glm_plan: bool = typer.Option(False, "--glm-plan"),
     attempt: bool = typer.Option(False, "--attempt"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
-    live: bool = typer.Option(
-        False, "--live", help="Enable live log viewing with Ctrl+L"
-    ),
 ) -> None:
     from fa.cli import app_state
 
@@ -274,7 +271,6 @@ def run(
         rounds=rounds,
         glm_plan=glm_plan,
         attempt_mode=attempt,
-        live_view=live,
     )
     if policies:
         from fa.policy.runner import run_policies_by_ids

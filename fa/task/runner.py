@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import logging
 import os
-import select
 import subprocess
-import sys
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 from fa.core.config import AGENT_LOGS_DIR_NAME, LOGS_DIR_NAME, TOOL_COMMANDS
-from fa.core.logview import _STREAM_JSON_TOOLS
+from fa.core.logview import _STREAM_JSON_TOOLS, TaskViewer
 from fa.core.quota import check_glm_quota
 from fa.task.model import Task
 from fa.task.prompt import build_task_prompt, infer_attempt, infer_memory_sequence
@@ -65,17 +63,11 @@ def _run_tool(
     log_file: Path,
     logger: logging.Logger,
     extra_env: dict[str, str] | None = None,
-    live_view: bool = False,
 ) -> int:
     cmd = _tool_cmd(tool, prompt)
     logger.debug("Executing agent tool command: %s", cmd)
     env = {**os.environ, **extra_env} if extra_env else None
-    supports_live = live_view and tool in _STREAM_JSON_TOOLS
-    if live_view and not supports_live:
-        logger.info("Live log viewing not supported for tool '%s'", tool)
     try:
-        if supports_live:
-            return _run_tool_with_live(cmd, log_file, logger, env)
         with log_file.open("w", encoding="utf-8") as file:
             completed = subprocess.run(
                 cmd,
@@ -90,92 +82,97 @@ def _run_tool(
     return int(completed.returncode)
 
 
-def _run_tool_with_live(
-    cmd: list[str],
-    log_file: Path,
+def _run_task_interactive(
+    task: Task,
+    parent: Task | None,
+    tool: str,
+    rounds: int,
     logger: logging.Logger,
-    env: dict[str, str] | None,
-) -> int:
-    from fa.core.logview import tail_log
+    extra_env: dict[str, str] | None,
+    attempt_mode: bool,
+    glm_plan: bool,
+    log_dir: Path,
+) -> bool:
+    viewer = TaskViewer(slug=task.slug, total_rounds=rounds)
+    failed = False
 
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-    with log_file.open("w", encoding="utf-8") as file:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=file,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env=env,
-        )
-
-    live_requested = threading.Event()
-    original_tty_settings = None
-
-    def _watch_stdin() -> None:
-        nonlocal original_tty_settings
-        if not sys.stdin.isatty():
-            return
-        import tty as tty_module
-
-        try:
-            original_tty_settings = tty_module.tcgetattr(sys.stdin.fileno())
-            tty_module.setcbreak(sys.stdin.fileno())
-        except Exception:
-            return
-        while proc.poll() is None and not live_requested.is_set():
-            try:
-                readable, _, _ = select.select([sys.stdin], [], [], 0.2)
-                if readable:
-                    ch = sys.stdin.read(1)
-                    if ch == "\x0c":  # Ctrl+L
-                        live_requested.set()
-                        break
-            except Exception:
-                break
-
-    watcher = threading.Thread(target=_watch_stdin, daemon=True)
-    watcher.start()
-
-    hint_printed = False
-    while proc.poll() is None:
-        if not hint_printed:
-            logger.info("Press Ctrl+L to view live logs, or wait for completion...")
-            hint_printed = True
-        if live_requested.wait(timeout=0.5):
-            live_requested.clear()
-            if original_tty_settings is not None:
-                import tty as tty_module
-
-                try:
-                    tty_module.tcsetattr(
-                        sys.stdin.fileno(),
-                        tty_module.TCSADRAIN,
-                        original_tty_settings,
-                    )
-                except Exception:
-                    pass
-            tail_log(log_file)
-            live_requested.clear()
-            try:
-                if sys.stdin.isatty():
-                    import tty as tty_module
-
-                    tty_module.setcbreak(sys.stdin.fileno())
-            except Exception:
-                pass
-
-    if original_tty_settings is not None:
-        import tty as tty_module
-
-        try:
-            tty_module.tcsetattr(
-                sys.stdin.fileno(), tty_module.TCSADRAIN, original_tty_settings
+    def _execute_rounds() -> None:
+        nonlocal failed
+        memory_count = infer_memory_sequence(task) - 1
+        attempt = infer_attempt(task) if attempt_mode else 1
+        feedback_count = _count_feedback_files(task) if attempt_mode else 0
+        mode = "attempt" if attempt_mode else "fresh"
+        for round_index in range(1, rounds + 1):
+            if glm_plan and not check_glm_quota(logger):
+                logger.error(
+                    "Task [%d] round %d/%d skipped - GLM quota check failed",
+                    task.id,
+                    round_index,
+                    rounds,
+                )
+                failed = True
+                viewer.mark_failed()
+                return
+            prompt = build_task_prompt(task, parent, is_attempt_run=attempt_mode)
+            _save_prompt(log_dir, round_index, attempt, attempt_mode, prompt)
+            logger.debug(
+                "Prompt rendered | mode=%s | attempt=%d | memory_files=%d | feedback_files=%d | chars=%d",
+                mode,
+                attempt,
+                memory_count,
+                feedback_count,
+                len(prompt),
             )
-        except Exception:
-            pass
+            logger.info(
+                "Task [%d] round %d/%d started | tool=%s",
+                task.id,
+                round_index,
+                rounds,
+                tool,
+            )
+            log_path = log_dir / f"round-{round_index}-{tool}.log"
+            viewer.start_round(round_index, log_path)
+            cmd = _tool_cmd(tool, prompt)
+            env = {**os.environ, **extra_env} if extra_env else None
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            t0 = time.monotonic()
+            try:
+                with log_path.open("w", encoding="utf-8") as file:
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=file,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        env=env,
+                    )
+                    proc.wait()
+                    code = int(proc.returncode)
+            except OSError:
+                code = 1
+            elapsed = time.monotonic() - t0
+            viewer.end_round(elapsed)
+            logger.info(
+                "Task [%d] round %d/%d completed in %ds | exit_code=%d",
+                task.id,
+                round_index,
+                rounds,
+                int(elapsed),
+                code,
+            )
+            if code != 0:
+                failed = True
+                viewer.mark_failed()
+                return
+        viewer.mark_done()
 
-    watcher.join(timeout=1)
-    return int(proc.returncode)
+    worker = threading.Thread(target=_execute_rounds, daemon=True)
+    worker.start()
+    viewer.run()
+    if viewer.user_exited:
+        worker.join()
+    else:
+        worker.join(timeout=5)
+    return failed
 
 
 def _task_log_dir(task: Task) -> Path:
@@ -252,7 +249,6 @@ def run_tasks(
     rounds: int,
     glm_plan: bool,
     attempt_mode: bool,
-    live_view: bool = False,
 ) -> int:
     tasks = all_tasks()
 
@@ -295,55 +291,68 @@ def run_tasks(
         logger.info('Task [%d] "%s" started', task.id, task.slug)
         failed = False
         log_dir = _task_log_dir(task)
-        memory_count = infer_memory_sequence(task) - 1
-        attempt = infer_attempt(task) if attempt_mode else 1
-        feedback_count = _count_feedback_files(task) if attempt_mode else 0
-        mode = "attempt" if attempt_mode else "fresh"
-        for round_index in range(1, rounds + 1):
-            if glm_plan and not check_glm_quota(logger):
-                logger.error(
-                    "Task [%d] round %d/%d skipped - GLM quota check failed",
+        if tool in _STREAM_JSON_TOOLS:
+            failed = _run_task_interactive(
+                task=task,
+                parent=parent,
+                tool=tool,
+                rounds=rounds,
+                logger=logger,
+                extra_env=extra_env,
+                attempt_mode=attempt_mode,
+                glm_plan=glm_plan,
+                log_dir=log_dir,
+            )
+            if failed:
+                has_failure = True
+        else:
+            memory_count = infer_memory_sequence(task) - 1
+            attempt = infer_attempt(task) if attempt_mode else 1
+            feedback_count = _count_feedback_files(task) if attempt_mode else 0
+            mode = "attempt" if attempt_mode else "fresh"
+            for round_index in range(1, rounds + 1):
+                if glm_plan and not check_glm_quota(logger):
+                    logger.error(
+                        "Task [%d] round %d/%d skipped - GLM quota check failed",
+                        task.id,
+                        round_index,
+                        rounds,
+                    )
+                    failed = True
+                    break
+                prompt = build_task_prompt(task, parent, is_attempt_run=attempt_mode)
+                _save_prompt(log_dir, round_index, attempt, attempt_mode, prompt)
+                logger.debug(
+                    "Prompt rendered | mode=%s | attempt=%d | memory_files=%d | feedback_files=%d | chars=%d",
+                    mode,
+                    attempt,
+                    memory_count,
+                    feedback_count,
+                    len(prompt),
+                )
+                logger.info(
+                    "Task [%d] round %d/%d started | tool=%s",
                     task.id,
                     round_index,
                     rounds,
+                    tool,
                 )
-                failed = True
-                break
-            prompt = build_task_prompt(task, parent, is_attempt_run=attempt_mode)
-            _save_prompt(log_dir, round_index, attempt, attempt_mode, prompt)
-            logger.debug(
-                "Prompt rendered | mode=%s | attempt=%d | memory_files=%d | feedback_files=%d | chars=%d",
-                mode,
-                attempt,
-                memory_count,
-                feedback_count,
-                len(prompt),
-            )
-            logger.info(
-                "Task [%d] round %d/%d started | tool=%s",
-                task.id,
-                round_index,
-                rounds,
-                tool,
-            )
-            log_path = log_dir / f"round-{round_index}-{tool}.log"
-            t0 = time.monotonic()
-            code = _run_tool(
-                tool, prompt, log_path, logger, extra_env=extra_env, live_view=live_view
-            )
-            elapsed = int(time.monotonic() - t0)
-            logger.info(
-                "Task [%d] round %d/%d completed in %ds | exit_code=%d",
-                task.id,
-                round_index,
-                rounds,
-                elapsed,
-                code,
-            )
-            if code != 0:
-                failed = True
-                has_failure = True
-                break
+                log_path = log_dir / f"round-{round_index}-{tool}.log"
+                t0 = time.monotonic()
+                code = _run_tool(tool, prompt, log_path, logger, extra_env=extra_env)
+                elapsed = int(time.monotonic() - t0)
+                logger.info(
+                    "Task [%d] round %d/%d completed in %ds | exit_code=%d",
+                    task.id,
+                    round_index,
+                    rounds,
+                    elapsed,
+                    code,
+                )
+                if code != 0:
+                    failed = True
+                    has_failure = True
+                    break
         if failed:
             task.status = "failed"
             task.completed_at = None

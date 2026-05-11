@@ -47,11 +47,23 @@ def _read_stdin() -> str:
         return sys.stdin.read().strip()
     try:
         from prompt_toolkit import prompt as pt_prompt
+        from prompt_toolkit.key_binding import KeyBindings
 
-        typer.echo("  (Press Ctrl+D or Esc+Enter to submit)")
+        kb = KeyBindings()
+
+        @kb.add("enter")
+        def _(event):
+            buf = event.app.current_buffer
+            if buf.text.strip() and buf.document.current_line.strip() == "":
+                buf.validate_and_handle()
+            else:
+                buf.newline(copy_margin=not buf.is_pasting)
+
+        typer.echo("  (Press Enter on blank line to submit)")
         text = pt_prompt(
             "Enter intent brief or task ID:\n> ",
             multiline=True,
+            key_bindings=kb,
         )
         return text.strip()
     except ImportError:
