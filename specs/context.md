@@ -23,7 +23,7 @@ Triggered when `--attempt` is **not** provided.
 
 - `memory_sequence` = count(memory-\*.md) + 1
 - No attempt concept displayed to agent
-- Context: task metadata + task.md path + prior rounds' memory files
+- Context: task metadata + plan.md path + prior rounds' memory files
 - Instruction: re-evaluate entire scope, build on what is correct, do not simply apply incremental patches
 
 ### Attempt Run (--attempt flag)
@@ -33,7 +33,7 @@ Triggered when `--attempt` **is** provided.
 - `attempt` = count(feedback-\*.md) + 1
 - Displays "Attempt: N" to agent
 - Prerequisite: feedback files must exist
-- Context: task metadata + task.md path + all memory files + feedback files
+- Context: task metadata + plan.md path + all memory files + feedback files
 - Instruction: resume from current state, do not repeat completed work
 
 ## Context Sources
@@ -42,9 +42,9 @@ Triggered when `--attempt` **is** provided.
 
 Fields injected: `id`, `slug`, `depends_on`, `related_to`, `status`.
 
-### Task Description File
+### Task Plan File
 
-Path to `task.md` is always provided. The AI agent reads the file to understand full requirements.
+Path to `plan.md` is always provided. The AI agent reads the file to understand full requirements.
 
 ### Parent Context (subtasks only)
 
@@ -53,7 +53,7 @@ For tasks with `parent_id != null`:
 | Context               | Injection Method                      |
 | --------------------- | ------------------------------------- |
 | Parent metadata       | Full metadata fields                  |
-| Parent task.md path   | Explicit path for AI to read          |
+| Parent spec.md path   | Explicit path for AI to read          |
 | Parent memory files   | Count only; paths available on demand |
 | Parent feedback files | Count only; paths available on demand |
 

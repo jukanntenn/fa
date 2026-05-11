@@ -115,9 +115,6 @@ def build_execution_plan(
                 if child_id not in appended:
                     output.append(child_id)
                     appended.add(child_id)
-            if parent_id in tasks and parent_id not in appended:
-                output.append(parent_id)
-                appended.add(parent_id)
             parent_processed.add(parent_id)
             continue
         selected_children = [
@@ -128,9 +125,6 @@ def build_execution_plan(
                 if child_id not in appended:
                     output.append(child_id)
                     appended.add(child_id)
-            if task_id not in appended:
-                output.append(task_id)
-                appended.add(task_id)
             parent_processed.add(task_id)
             continue
         if task_id not in appended:
@@ -158,8 +152,8 @@ def run_tasks(
     if force:
         for task_id in ids:
             task = tasks.get(task_id)
-            if task and task.status != "pending":
-                task.status = "pending"
+            if task and task.status not in {"approved", "failed"}:
+                task.status = "approved"
                 task.completed_at = None
                 save_task(task)
 
@@ -188,7 +182,7 @@ def run_tasks(
             )
             has_failure = True
             continue
-        task.status = "running"
+        task.transition_to("running")
         save_task(task)
         logger.info('Task [%d] "%s" started', task.id, task.slug)
         failed = False
@@ -241,12 +235,12 @@ def run_tasks(
                 has_failure = True
                 break
         if failed:
-            task.status = "pending"
+            task.status = "failed"
             task.completed_at = None
             save_task(task)
-            logger.info('Task [%d] "%s" failed - reset to pending', task.id, task.slug)
+            logger.info('Task [%d] "%s" failed', task.id, task.slug)
             continue
-        task.status = "completed"
+        task.transition_to("completed")
         task.completed_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         save_task(task)
         logger.info('Task [%d] "%s" completed', task.id, task.slug)

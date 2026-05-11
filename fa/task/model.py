@@ -5,6 +5,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from fa.core.config import STATUS_ALIASES, VALID_STATUSES, VALID_TRANSITIONS
+
+
+class InvalidTransition(Exception):
+    def __init__(self, current: str, target: str) -> None:
+        self.current = current
+        self.target = target
+        super().__init__(f"invalid transition: {current} → {target}")
+
 
 @dataclass
 class Task:
@@ -20,11 +29,13 @@ class Task:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], path: Path) -> "Task":
+        raw_status = str(data.get("status", "draft"))
+        status = STATUS_ALIASES.get(raw_status, raw_status)
         return cls(
             id=int(data["id"]),
             slug=str(data["slug"]),
             parent_id=data.get("parent_id"),
-            status=str(data.get("status", "pending")),
+            status=status,
             depends_on=list(data.get("depends_on", [])),
             related_to=list(data.get("related_to", [])),
             created_at=str(data["created_at"]),
@@ -44,13 +55,20 @@ class Task:
             "completed_at": self.completed_at,
         }
 
+    def transition_to(self, target: str) -> None:
+        if target not in VALID_STATUSES:
+            raise ValueError(f"unknown status: {target}")
+        if target not in VALID_TRANSITIONS.get(self.status, set()):
+            raise InvalidTransition(self.status, target)
+        self.status = target
+
     @staticmethod
     def new(task_id: int, slug: str, parent_id: int | None, path: Path) -> "Task":
         return Task(
             id=task_id,
             slug=slug,
             parent_id=parent_id,
-            status="pending",
+            status="draft",
             depends_on=[],
             related_to=[],
             created_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),

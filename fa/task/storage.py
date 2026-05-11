@@ -7,7 +7,6 @@ from pathlib import Path
 
 from fa.core.config import (
     ARCHIVE_DIR_NAME,
-    TASK_FILE_NAME,
     TASK_JSON_FILE_NAME,
     TASKS_DIR_NAME,
 )
@@ -84,16 +83,11 @@ def create_task(slug: str, parent_id: int | None = None) -> Task:
     task_path.mkdir(parents=True, exist_ok=False)
     task = Task.new(task_id, slug, parent_id, task_path)
     _write_json(task.path / TASK_JSON_FILE_NAME, task.to_dict())
-    (task.path / TASK_FILE_NAME).write_text("", encoding="utf-8")
     return task
 
 
 def save_task(task: Task) -> None:
     _write_json(task.path / TASK_JSON_FILE_NAME, task.to_dict())
-
-
-def task_file(task: Task) -> Path:
-    return task.path / TASK_FILE_NAME
 
 
 def parse_id_range(value: str) -> list[int]:

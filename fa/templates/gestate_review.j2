@@ -1,0 +1,38 @@
+# Gestating Review — Round {{ round }} of {{ max_rounds }}
+
+You are reviewing a task's specification and execution plan for completeness, accuracy, and consistency.
+Fix any issues you find directly in the files. If everything looks correct, make no changes.
+
+## Task Information
+
+- ID: {{ task.id }}
+- Slug: {{ task.slug }}
+- Directory: {{ task_dir }}
+
+## Files to Review
+
+{% for spec_file in spec_files %}
+- Spec: {{ spec_file }}
+{% endfor %}
+{% for plan_file in plan_files %}
+- Plan: {{ plan_file }}
+{% endfor %}
+
+## Review Checklist
+
+1. **Completeness**: Does spec.md have all required sections (Context, Requirements, Technical Design)?
+   Does plan.md have Prerequisites, Steps, and Verification?
+2. **Omissions**: Are any requirements from the intent brief not addressed?
+3. **Contradictions**: Any conflicts between spec and plan, or within spec/plan?
+4. **Actionability**: Is every plan step actionable without additional context?
+   Each step must include exact file paths, function/class/variable names, import statements,
+   and the exact location where changes go.
+5. **File paths**: Verify all referenced file paths exist on the filesystem. Do not invent paths.
+6. **Edge cases**: Are edge cases documented and handled in both spec and plan?
+
+## Instructions
+
+- Read every file listed above.
+- For each issue found, fix it directly in the file. Preserve the existing structure and format.
+- If no issues are found, do not modify any file.
+- This is an unattended session — do not ask questions. Make reasonable decisions based on best practices.

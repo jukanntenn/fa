@@ -4,7 +4,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateNotFound
 
-from fa.core.config import PROMPT_TEMPLATE_NAME, TASK_FILE_NAME, package_template_dir
+from fa.core.config import PROMPT_TEMPLATE_NAME, package_template_dir
 from fa.task.model import Task
 from fa.task.storage import fa_dir, project_root, relative_path
 
@@ -74,8 +74,8 @@ def build_task_prompt(task: Task, parent: Task | None, is_attempt_run: bool) -> 
     return template.render(
         task=task.to_dict(),
         parent=parent.to_dict() if parent else None,
-        task_file=relative_path(task.path / TASK_FILE_NAME),
-        parent_file=relative_path(parent.path / TASK_FILE_NAME) if parent else None,
+        task_file=relative_path(task.path / "plan.md"),
+        parent_file=relative_path(parent.path / "spec.md") if parent else None,
         attempt=attempt,
         is_attempt_run=is_attempt_run,
         memory_files=memory_files,

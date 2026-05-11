@@ -9,7 +9,6 @@ LOGS_DIR_NAME = "logs"
 AGENT_LOGS_DIR_NAME = "agents"
 POLICIES_DIR_NAME = "policies"
 TEMPLATES_DIR_NAME = "templates"
-TASK_FILE_NAME = "task.md"
 TASK_JSON_FILE_NAME = "task.json"
 PROMPT_TEMPLATE_NAME = "task_prompt.j2"
 FA_LOG_FILE_NAME = "fa.log"
@@ -55,7 +54,17 @@ TOOL_AGENT_ARG: dict[str, str] = {
     "codex": "$",
 }
 
-VALID_STATUSES = {"pending", "running", "completed"}
+VALID_STATUSES = {"draft", "approved", "running", "failed", "completed"}
+
+VALID_TRANSITIONS: dict[str, set[str]] = {
+    "draft": {"approved"},
+    "approved": {"running", "completed"},
+    "running": {"completed", "failed"},
+    "failed": {"running", "completed"},
+    "completed": set(),
+}
+
+STATUS_ALIASES: dict[str, str] = {"pending": "draft"}
 
 
 def package_template_dir() -> Path:

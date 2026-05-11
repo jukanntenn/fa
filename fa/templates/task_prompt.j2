@@ -14,7 +14,7 @@ Specification index: {{ specs_dir }}/index.md
 - Slug: {{ parent.slug }}
 {% if parent.depends_on %}- Depends on: {{ parent.depends_on|join(', ') }}
 {% endif %}{% if parent.related_to %}- Related to: {{ parent.related_to|join(', ') }}
-{% endif %}- Task file: {{ parent_file }}
+{% endif %}- Spec: {{ parent_file }}
 - Memory files: {{ parent_memory_count }} file(s) available
 - Feedback files: {{ parent_feedback_count }} file(s) available
 {% endif %}
@@ -26,7 +26,7 @@ Specification index: {{ specs_dir }}/index.md
 {% if task.depends_on %}- Depends on: {{ task.depends_on|join(', ') }}
 {% endif %}{% if task.related_to %}- Related to: {{ task.related_to|join(', ') }}
 {% endif %}{% if is_attempt_run %}- Attempt: {{ attempt }}
-{% endif %}- Task file: {{ task_file }}
+{% endif %}- Plan: {{ task_file }}
 {% if not is_attempt_run %}
 
 ## Fresh Run Instructions

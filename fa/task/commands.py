@@ -68,6 +68,14 @@ def done(id_range: str) -> None:
             has_error = True
             typer.echo(f"Error: task {task_id} not found", err=True)
             continue
+        if task.status not in {"approved", "running", "failed"}:
+            has_error = True
+            typer.echo(
+                f"Error: task {task_id} is '{task.status}', "
+                "can only complete tasks that are approved/running/failed",
+                err=True,
+            )
+            continue
         task.status = "completed"
         task.completed_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         save_task(task)
@@ -150,14 +158,15 @@ def run(
                 err=True,
             )
             raise typer.Exit(code=1)
-        # Non-pending tasks require --force
-        non_pending = [
-            cid for cid in candidates if tasks[cid].status != "pending"
+        # Tasks must be approved or failed to run
+        not_runnable = [
+            cid for cid in candidates if tasks[cid].status not in {"approved", "failed"}
         ]
-        if non_pending and not force:
+        if not_runnable and not force:
             typer.echo(
-                "Error: task(s) " + ",".join(str(n) for n in non_pending)
-                + " are not pending. Use --force to override.",
+                "Error: task(s) "
+                + ",".join(str(n) for n in not_runnable)
+                + " are not approved/failed. Use --force to override.",
                 err=True,
             )
             raise typer.Exit(code=1)
@@ -166,7 +175,7 @@ def run(
         candidates = sorted(tasks.keys())
     else:
         candidates = sorted(
-            task.id for task in tasks.values() if task.status == "pending"
+            task.id for task in tasks.values() if task.status in {"approved", "failed"}
         )
 
     # Apply attempt filter: skip tasks with no feedback files
@@ -209,7 +218,9 @@ def run(
         from fa.policy.runner import run_policies_by_ids
 
         policy_ids = [item.strip() for item in policies.split(",") if item.strip()]
-        policy_result = run_policies_by_ids(logger, policy_ids, tool=tool, rounds=rounds)
+        policy_result = run_policies_by_ids(
+            logger, policy_ids, tool=tool, rounds=rounds
+        )
         if policy_result != 0:
             exit_code = 1
     if exit_code != 0:

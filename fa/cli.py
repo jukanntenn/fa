@@ -8,6 +8,7 @@ import typer
 from fa.core.config import LOGS_DIR_NAME
 from fa.core.logging import configure_logging
 from fa.core.project import ensure_fa_structure, find_project_root
+from fa.gestate.commands import gestate
 from fa.policy.commands import policy_app
 from fa.task.commands import task_app
 
@@ -34,6 +35,9 @@ app_state = AppState(
 def init() -> None:
     ensure_fa_structure(app_state.project_root)
     typer.echo(f"Initialized {app_state.project_root / '.fa'}")
+
+
+app.command("gestate")(gestate)
 
 
 def main() -> None:
