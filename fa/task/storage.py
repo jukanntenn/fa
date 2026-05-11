@@ -64,6 +64,10 @@ def find_task(task_id: int) -> Task | None:
     return all_tasks().get(task_id)
 
 
+def find_children(parent_id: int) -> list[Task]:
+    return [t for t in all_tasks().values() if t.parent_id == parent_id]
+
+
 def next_task_id() -> int:
     tasks = all_tasks()
     if not tasks:

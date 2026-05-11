@@ -5,11 +5,13 @@ from datetime import datetime
 
 import typer
 
+from fa.task.model import Task
 from fa.task.runner import build_execution_plan, run_tasks
 from fa.task.storage import (
     all_tasks,
     archive_dir,
     create_task,
+    find_children,
     find_task,
     parse_id_range,
     relative_path,
@@ -124,6 +126,41 @@ def archive(id_range: str) -> None:
         raise typer.Exit(code=1)
 
 
+def _resolve_to_leaves(task_ids: list[int], tasks: dict[int, Task]) -> list[int]:
+    """Expand parent task IDs to their children. Return deduplicated leaf IDs."""
+    leaves: list[int] = []
+    seen: set[int] = set()
+    for tid in task_ids:
+        children = find_children(tid)
+        if children:
+            for child in children:
+                if child.id not in seen:
+                    leaves.append(child.id)
+                    seen.add(child.id)
+        else:
+            if tid not in seen:
+                leaves.append(tid)
+                seen.add(tid)
+    return leaves
+
+
+def _auto_complete_done_parents(tasks: dict[int, Task]) -> None:
+    """Auto-complete parent tasks whose children are all completed."""
+    for task in tasks.values():
+        if task.parent_id is not None:
+            continue
+        children = find_children(task.id)
+        if not children:
+            continue
+        if all(c.status == "completed" for c in children) and task.status not in {
+            "completed",
+            "draft",
+        }:
+            task.transition_to("completed")
+            task.completed_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            save_task(task)
+
+
 @task_app.command("run")
 def run(
     ids: str | None = typer.Option(None, "--ids"),
@@ -134,6 +171,9 @@ def run(
     glm_plan: bool = typer.Option(False, "--glm-plan"),
     attempt: bool = typer.Option(False, "--attempt"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+    live: bool = typer.Option(
+        False, "--live", help="Enable live log viewing with Ctrl+L"
+    ),
 ) -> None:
     from fa.cli import app_state
 
@@ -147,43 +187,59 @@ def run(
     # Get all tasks
     tasks = all_tasks()
 
+    # Auto-complete parents whose children are all done (EC1)
+    _auto_complete_done_parents(tasks)
+    tasks = all_tasks()
+
     # Build candidate list
     if ids is not None:
-        candidates = parse_id_range(ids)
-        # Validate that referenced tasks exist
-        missing = [cid for cid in candidates if cid not in tasks]
+        raw_ids = parse_id_range(ids)
+        missing = [tid for tid in raw_ids if tid not in tasks]
         if missing:
             typer.echo(
                 "Error: task(s) not found: " + ",".join(str(m) for m in missing),
                 err=True,
             )
             raise typer.Exit(code=1)
-        # Tasks must be approved or failed to run
-        not_runnable = [
-            cid for cid in candidates if tasks[cid].status not in {"approved", "failed"}
-        ]
-        if not_runnable and not force:
-            typer.echo(
-                "Error: task(s) "
-                + ",".join(str(n) for n in not_runnable)
-                + " are not approved/failed. Use --force to override.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
+        candidates = _resolve_to_leaves(raw_ids, tasks)
+        if force:
+            # EC7: --force skips completed children, doesn't re-run them
+            candidates = [cid for cid in candidates if tasks[cid].status != "completed"]
+        elif attempt:
+            # EC5: --attempt --ids filters by feedback files
+            candidates = [
+                cid
+                for cid in candidates
+                if tasks[cid].status in {"approved", "failed"}
+                and list(tasks[cid].path.glob("feedback-*.md"))
+            ]
+        else:
+            not_runnable = [
+                cid
+                for cid in candidates
+                if tasks[cid].status not in {"approved", "failed"}
+            ]
+            if not_runnable:
+                typer.echo(
+                    "Error: task(s) "
+                    + ",".join(str(n) for n in not_runnable)
+                    + " are not approved/failed. Use --force to override.",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
     elif attempt:
-        # Attempt mode without --ids: select all tasks regardless of status
-        candidates = sorted(tasks.keys())
-    else:
-        candidates = sorted(
-            task.id for task in tasks.values() if task.status in {"approved", "failed"}
-        )
-
-    # Apply attempt filter: skip tasks with no feedback files
-    if attempt:
+        leaf_ids = _resolve_to_leaves(sorted(tasks.keys()), tasks)
         candidates = [
-            task_id
-            for task_id in candidates
-            if task_id in tasks and list(tasks[task_id].path.glob("feedback-*.md"))
+            tid
+            for tid in leaf_ids
+            if tid in tasks
+            and tasks[tid].status in {"approved", "failed"}
+            and list(tasks[tid].path.glob("feedback-*.md"))
+        ]
+    else:
+        leaf_ids = _resolve_to_leaves(sorted(tasks.keys()), tasks)
+        candidates = [
+            tid for tid in leaf_ids if tasks[tid].status in {"approved", "failed"}
         ]
 
     if not candidates:
@@ -197,9 +253,14 @@ def run(
         typer.echo(f"\nTasks to execute ({len(plan)} total, {rounds} round(s)):\n")
         for task_id in plan:
             task = tasks.get(task_id)
-            if task:
-                parent_info = f" (parent: {task.parent_id})" if task.parent_id else ""
-                typer.echo(f"  [{task_id}] {task.slug}{parent_info}")
+            if not task:
+                continue
+            parent_info = ""
+            if task.parent_id:
+                parent_task = tasks.get(task.parent_id)
+                if parent_task:
+                    parent_info = f" (parent: [{parent_task.id}] {parent_task.slug})"
+            typer.echo(f"  [{task_id}] {task.slug}{parent_info}")
         typer.echo("")
         if not typer.confirm("Proceed?", default=True):
             typer.echo("Aborted.")
@@ -213,6 +274,7 @@ def run(
         rounds=rounds,
         glm_plan=glm_plan,
         attempt_mode=attempt,
+        live_view=live,
     )
     if policies:
         from fa.policy.runner import run_policies_by_ids

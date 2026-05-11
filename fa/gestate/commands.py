@@ -19,6 +19,7 @@ from fa.task.model import Task
 from fa.task.storage import (
     all_tasks,
     fa_dir,
+    find_children,
     find_task,
     relative_path,
     save_task,
@@ -42,11 +43,27 @@ def _is_task_id(value: str) -> bool:
 
 
 def _read_stdin() -> str:
-    if sys.stdin.isatty():
+    if not sys.stdin.isatty():
+        return sys.stdin.read().strip()
+    try:
+        from prompt_toolkit import prompt as pt_prompt
+
+        typer.echo("  (Press Ctrl+D or Esc+Enter to submit)")
+        text = pt_prompt(
+            "Enter intent brief or task ID:\n> ",
+            multiline=True,
+        )
+        return text.strip()
+    except ImportError:
+        typer.echo(
+            "Warning: prompt_toolkit not installed, single-line input only.",
+            err=True,
+        )
         typer.echo("Enter intent brief or task ID: ", nl=False)
         line = sys.stdin.readline()
         return line.strip() if line else ""
-    return sys.stdin.read().strip()
+    except EOFError:
+        return ""
 
 
 def _build_tool_cmd(tool: str, prompt: str) -> list[str]:
@@ -233,4 +250,20 @@ def gestate(
 
     task.status = "approved"
     save_task(task)
+
+    children = find_children(task.id)
+    approved_count = 0
+    for child in children:
+        if child.status == "draft":
+            child.transition_to("approved")
+            save_task(child)
+            approved_count += 1
+        elif child.status not in {"approved", "completed"}:
+            typer.echo(
+                f"Warning: subtask {child.id} is '{child.status}', skipped approval",
+                err=True,
+            )
+    if children:
+        typer.echo(f"{approved_count}/{len(children)} subtask(s) approved")
+
     typer.echo(f"Task {task.id} approved")
