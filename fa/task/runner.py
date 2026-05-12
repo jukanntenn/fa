@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import select
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 from fa.core.config import AGENT_LOGS_DIR_NAME, LOGS_DIR_NAME, TOOL_COMMANDS
-from fa.core.logview import _STREAM_JSON_TOOLS, TaskViewer
+from fa.core.logview import _STREAM_JSON_TOOLS, TaskViewer, ViewerController
 from fa.core.quota import check_glm_quota
 from fa.task.model import Task
 from fa.task.prompt import build_task_prompt, infer_attempt, infer_memory_sequence
@@ -82,6 +85,42 @@ def _run_tool(
     return int(completed.returncode)
 
 
+@contextlib.contextmanager
+def _main_session_cbreak():
+    if not sys.stdin.isatty():
+        yield
+        return
+    original_tty = None
+    try:
+        import termios as termios_module
+        import tty as tty_module
+
+        original_tty = termios_module.tcgetattr(sys.stdin.fileno())
+        tty_module.setcbreak(sys.stdin.fileno())
+    except Exception:
+        yield
+        return
+    try:
+        yield
+    finally:
+        if original_tty is not None:
+            termios_module.tcsetattr(
+                sys.stdin.fileno(), termios_module.TCSADRAIN, original_tty
+            )
+
+
+def _read_main_session_key() -> str | None:
+    if not sys.stdin.isatty():
+        return None
+    try:
+        readable, _, _ = select.select([sys.stdin], [], [], 0.2)
+        if not readable:
+            return None
+        return sys.stdin.read(1)
+    except OSError:
+        return None
+
+
 def _run_task_interactive(
     task: Task,
     parent: Task | None,
@@ -92,8 +131,10 @@ def _run_task_interactive(
     attempt_mode: bool,
     glm_plan: bool,
     log_dir: Path,
+    open_viewer: bool = False,
 ) -> bool:
     viewer = TaskViewer(slug=task.slug, total_rounds=rounds)
+    viewer_controller = ViewerController(viewer)
     failed = False
 
     def _execute_rounds() -> None:
@@ -140,11 +181,13 @@ def _run_task_interactive(
                 with log_path.open("w", encoding="utf-8") as file:
                     proc = subprocess.Popen(
                         cmd,
+                        stdin=subprocess.DEVNULL,
                         stdout=file,
                         stderr=subprocess.STDOUT,
                         text=True,
                         env=env,
                     )
+                    logger.info("Agent running. Press Ctrl+L to open the log viewer.")
                     proc.wait()
                     code = int(proc.returncode)
             except OSError:
@@ -167,11 +210,25 @@ def _run_task_interactive(
 
     worker = threading.Thread(target=_execute_rounds, daemon=True)
     worker.start()
-    viewer.run()
-    if viewer.user_exited:
+    if not sys.stdin.isatty():
         worker.join()
     else:
-        worker.join(timeout=5)
+        logger.info("Agent running. Press Ctrl+L to open the log viewer.")
+        if open_viewer:
+            viewer_controller.open()
+        with _main_session_cbreak():
+            while True:
+                if not worker.is_alive():
+                    break
+                if viewer_controller.is_open():
+                    time.sleep(0.2)
+                    continue
+                key = _read_main_session_key()
+                if key == "\x0c":
+                    viewer_controller.open()
+    worker.join()
+    viewer_controller.wait_closed()
+    viewer._drain_current_log()
     return failed
 
 
@@ -195,6 +252,7 @@ def _save_prompt(
     else:
         name = f"round-{round_index}-prompt.md"
     path = log_dir / name
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(prompt, encoding="utf-8")
     return path
 
@@ -249,6 +307,8 @@ def run_tasks(
     rounds: int,
     glm_plan: bool,
     attempt_mode: bool,
+    *,
+    open_viewer: bool = False,
 ) -> int:
     tasks = all_tasks()
 
@@ -271,6 +331,7 @@ def run_tasks(
     plan = ids
     logger.info("Execution plan: %d tasks %s", len(plan), plan)
     has_failure = False
+    open_viewer_for_next_stream_task = open_viewer
     for task_id in plan:
         task = all_tasks().get(task_id)
         if task is None:
@@ -302,7 +363,9 @@ def run_tasks(
                 attempt_mode=attempt_mode,
                 glm_plan=glm_plan,
                 log_dir=log_dir,
+                open_viewer=open_viewer_for_next_stream_task,
             )
+            open_viewer_for_next_stream_task = False
             if failed:
                 has_failure = True
         else:

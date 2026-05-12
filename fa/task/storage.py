@@ -68,17 +68,23 @@ def find_children(parent_id: int) -> list[Task]:
     return [t for t in all_tasks().values() if t.parent_id == parent_id]
 
 
-def next_task_id() -> int:
+def next_task_id(parent_id: int | None = None) -> int:
     tasks = all_tasks()
     if not tasks:
         return 1
-    return max(tasks.keys()) + 1
+    if parent_id is None or parent_id not in tasks:
+        return max(tasks.keys()) + 1
+    used_ids = set(tasks)
+    candidate = parent_id + 1
+    while candidate in used_ids:
+        candidate += 1
+    return candidate
 
 
 def create_task(slug: str, parent_id: int | None = None) -> Task:
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9-]*", slug):
         raise ValueError("slug must be alphanumeric with hyphens")
-    task_id = next_task_id()
+    task_id = next_task_id(parent_id)
     parent_task = find_task(parent_id) if parent_id is not None else None
     if parent_id is not None and parent_task is None:
         raise FileNotFoundError(f"task {parent_id} not found")

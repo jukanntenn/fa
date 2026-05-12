@@ -39,6 +39,122 @@ def _truncate(text: str, max_len: int = 200, preserve_newlines: bool = False) ->
     return text[:max_len] + "..."
 
 
+_ANSI_CSI_END = frozenset(chr(c) for c in range(0x40, 0x7F))
+_SGR_CLOSE_CATEGORIES = {
+    "22": {"intensity"},
+    "23": {"italic"},
+    "24": {"underline"},
+    "25": {"blink"},
+    "27": {"inverse"},
+    "28": {"hidden"},
+    "29": {"strike"},
+    "39": {"fg"},
+    "49": {"bg"},
+}
+
+
+def _update_active_sgr(params: str, active_sgr: set[str]) -> None:
+    codes = params.split(";") if params else ["0"]
+    i = 0
+    while i < len(codes):
+        code = codes[i] or "0"
+        if code == "0":
+            active_sgr.clear()
+        elif code in _SGR_CLOSE_CATEGORIES:
+            active_sgr.difference_update(_SGR_CLOSE_CATEGORIES[code])
+        elif code in {"1", "2"}:
+            active_sgr.add("intensity")
+        elif code == "3":
+            active_sgr.add("italic")
+        elif code == "4":
+            active_sgr.add("underline")
+        elif code == "5":
+            active_sgr.add("blink")
+        elif code == "7":
+            active_sgr.add("inverse")
+        elif code == "8":
+            active_sgr.add("hidden")
+        elif code == "9":
+            active_sgr.add("strike")
+        elif code in {
+            "30",
+            "31",
+            "32",
+            "33",
+            "34",
+            "35",
+            "36",
+            "37",
+            "90",
+            "91",
+            "92",
+            "93",
+            "94",
+            "95",
+            "96",
+            "97",
+        }:
+            active_sgr.add("fg")
+        elif code in {
+            "40",
+            "41",
+            "42",
+            "43",
+            "44",
+            "45",
+            "46",
+            "47",
+            "100",
+            "101",
+            "102",
+            "103",
+            "104",
+            "105",
+            "106",
+            "107",
+        }:
+            active_sgr.add("bg")
+        elif code in {"38", "48"}:
+            active_sgr.add("fg" if code == "38" else "bg")
+            if i + 1 < len(codes) and codes[i + 1] == "5":
+                i += 2
+            elif i + 1 < len(codes) and codes[i + 1] == "2":
+                i += 4
+        i += 1
+
+
+def _truncate_to_visible(line: str, max_cols: int) -> str:
+    if max_cols <= 0:
+        return ""
+    result: list[str] = []
+    visible = 0
+    i = 0
+    active_sgr: set[str] = set()
+    while i < len(line):
+        if visible >= max_cols:
+            break
+        ch = line[i]
+        if ch == "\x1b" and i + 1 < len(line) and line[i + 1] == "[":
+            j = i + 2
+            while j < len(line) and line[j] not in _ANSI_CSI_END:
+                j += 1
+            if j >= len(line):
+                break
+            seq = line[i : j + 1]
+            result.append(seq)
+            if seq.endswith("m"):
+                _update_active_sgr(seq[2:-1], active_sgr)
+            i = j + 1
+            continue
+        result.append(ch)
+        visible += 1
+        i += 1
+    text = "".join(result)
+    if active_sgr:
+        text += _RESET
+    return text
+
+
 def parse_jsonl_line(line: str) -> str | None:
     raw = line.strip()
     if not raw:
@@ -90,7 +206,9 @@ def _format_assistant(obj: dict) -> str | None:
                     if isinstance(c, dict) and c.get("type") == "text"
                 ]
                 content = " ".join(texts)
-            parts.append(f"{_DIM}[tool result] {_truncate(str(content))}{_RESET}")
+            parts.append(
+                f"{_DIM}[tool result]{_RESET}\n{_truncate(str(content), 2000, preserve_newlines=True)}"
+            )
     return "\n".join(parts) if parts else None
 
 
@@ -110,7 +228,9 @@ def _format_user(obj: dict) -> str | None:
                     if isinstance(c, dict) and c.get("type") == "text"
                 ]
                 content = " ".join(texts)
-            parts.append(f"{_DIM}[tool result] {_truncate(str(content))}{_RESET}")
+            parts.append(
+                f"{_DIM}[tool result]{_RESET}\n{_truncate(str(content), 2000, preserve_newlines=True)}"
+            )
     return "\n".join(parts) if parts else None
 
 
@@ -121,7 +241,7 @@ def _format_result(obj: dict) -> str:
     duration_str = ""
     if duration_ms is not None:
         duration_str = f" in {duration_ms / 1000:.1f}s"
-    result = _truncate(str(result_text), 4000, preserve_newlines=True)
+    result = str(result_text).strip()
     if subtype == "success":
         return f"{_BOLD}{_GREEN}[completed{duration_str}]{_RESET}\n{result}"
     return f"{_BOLD}{_RED}[failed{duration_str}]{_RESET}\n{result}"
@@ -158,27 +278,29 @@ class TaskViewer:
         self._original_tty = None
         self._task_done = threading.Event()
         self._task_failed = threading.Event()
-        self._exit_requested = threading.Event()
-
-    @property
-    def user_exited(self) -> bool:
-        return self._exit_requested.is_set()
+        self._close_requested = threading.Event()
+        self._drain_lock = threading.Lock()
 
     def start_round(self, round_index: int, log_path: Path) -> None:
-        self._current_round = round_index
-        self._current_log = log_path
-        self._last_log = None
-        self._log_offset = 0
-        if round_index > 1:
-            self._append_entry(
-                f"{_DIM}--- Starting Round {round_index}/{self.total_rounds} ---{_RESET}"
+        with self._drain_lock:
+            self._current_round = round_index
+            self._current_log = log_path
+            self._last_log = None
+            self._log_offset = 0
+            text = (
+                f"{_DIM}--- Round {round_index}/{self.total_rounds} started ---{_RESET}"
             )
+            self._entries.append(Entry(round_index=round_index, text=text))
+            if self._scroll_offset > 0:
+                self._scroll_offset += text.count("\n") + 1
 
     def end_round(self, duration: float) -> None:
-        self._drain_current_log()
-        self._append_entry(
-            f"{_DIM}--- Round {self._current_round}/{self.total_rounds} completed ({duration:.1f}s) ---{_RESET}"
-        )
+        with self._drain_lock:
+            self._drain_current_log_unlocked()
+            text = f"{_DIM}--- Round {self._current_round}/{self.total_rounds} completed ({duration:.1f}s) ---{_RESET}"
+            self._entries.append(Entry(round_index=self._current_round, text=text))
+            if self._scroll_offset > 0:
+                self._scroll_offset += text.count("\n") + 1
 
     def mark_failed(self) -> None:
         self._task_failed.set()
@@ -186,7 +308,11 @@ class TaskViewer:
     def mark_done(self) -> None:
         self._task_done.set()
 
+    def request_close(self) -> None:
+        self._close_requested.set()
+
     def run(self) -> None:
+        self._close_requested.clear()
         self._enter_cbreak()
         try:
             self._run_loop()
@@ -230,7 +356,7 @@ class TaskViewer:
             time.sleep(0.3)
 
     def _should_exit(self) -> bool:
-        if self._exit_requested.is_set():
+        if self._close_requested.is_set():
             return True
         if not sys.stdin.isatty():
             if self._task_done.is_set() or self._task_failed.is_set():
@@ -238,6 +364,10 @@ class TaskViewer:
         return False
 
     def _drain_current_log(self) -> None:
+        with self._drain_lock:
+            self._drain_current_log_unlocked()
+
+    def _drain_current_log_unlocked(self) -> None:
         if self._current_log is None:
             return
         if self._current_log != self._last_log:
@@ -250,12 +380,11 @@ class TaskViewer:
         for raw_line in new_lines:
             formatted = parse_jsonl_line(raw_line)
             if formatted is not None:
-                self._append_entry(formatted)
-
-    def _append_entry(self, text: str) -> None:
-        self._entries.append(Entry(round_index=self._current_round, text=text))
-        if self._scroll_offset > 0:
-            self._scroll_offset += text.count("\n") + 1
+                self._entries.append(
+                    Entry(round_index=self._current_round, text=formatted)
+                )
+                if self._scroll_offset > 0:
+                    self._scroll_offset += formatted.count("\n") + 1
 
     def _read_log_lines(self, path: Path, offset: int) -> list[str]:
         if not path.exists():
@@ -282,7 +411,7 @@ class TaskViewer:
                 return
             ch = sys.stdin.read(1)
             if ch == "q":
-                self._exit_requested.set()
+                self._close_requested.set()
                 return
             if ch == "\x1b":
                 self._handle_escape_sequence()
@@ -315,15 +444,19 @@ class TaskViewer:
         elif seq == "\x1b[6~":
             self._scroll_down(self._page_size())
         elif seq == "\x1b[H":
-            self._scroll_offset = 10**6
+            with self._drain_lock:
+                self._scroll_offset = 10**6
         elif seq == "\x1b[F":
-            self._scroll_offset = 0
+            with self._drain_lock:
+                self._scroll_offset = 0
 
     def _scroll_up(self, count: int) -> None:
-        self._scroll_offset += count
+        with self._drain_lock:
+            self._scroll_offset += count
 
     def _scroll_down(self, count: int) -> None:
-        self._scroll_offset = max(0, self._scroll_offset - count)
+        with self._drain_lock:
+            self._scroll_offset = max(0, self._scroll_offset - count)
 
     def _page_size(self) -> int:
         _, rows = shutil.get_terminal_size((80, 24))
@@ -331,51 +464,122 @@ class TaskViewer:
 
     def _render(self) -> None:
         cols, rows = shutil.get_terminal_size((80, 24))
-        content_height = max(1, rows - 2)
-        lines = [self._render_header()]
-        body_lines = self._render_body_lines(cols)
-        if self._scroll_offset == 0:
+        if cols < 20:
+            cols = 80
+        rows = max(1, rows)
+
+        with self._drain_lock:
+            entries_snapshot = list(self._entries)
+            scroll_offset = self._scroll_offset
+            current_round = self._current_round
+            is_waiting = (
+                self._current_log is not None
+                and not self._current_log.exists()
+                and not self._task_done.is_set()
+                and not self._task_failed.is_set()
+            )
+
+        header = _truncate_to_visible(self._render_header_with(current_round), cols)
+        footer_text = self._render_footer()
+        footer = (
+            _truncate_to_visible(footer_text, cols) if footer_text is not None else None
+        )
+        show_header = rows >= 3
+        show_footer = rows >= 3 and footer is not None
+        reserved = (1 if show_header else 0) + (1 if show_footer else 0)
+        content_height = max(1, rows - reserved)
+
+        body_lines = self._render_body_lines_from(entries_snapshot, cols, is_waiting)
+        if scroll_offset == 0:
             visible = body_lines[-content_height:]
         else:
-            scroll = min(self._scroll_offset, max(0, len(body_lines) - content_height))
+            scroll = min(scroll_offset, max(0, len(body_lines) - content_height))
             end = len(body_lines) - scroll
             start = max(0, end - content_height)
             visible = body_lines[start:end]
             if start > 0:
-                visible = [f"{_DIM}[-- more above --]{_RESET}"] + visible[1:]
+                visible = [
+                    _truncate_to_visible(f"{_DIM}[-- more above --]{_RESET}", cols)
+                ] + visible[1:]
             if end < len(body_lines):
-                visible = visible[:-1] + [f"{_DIM}[-- new output below --]{_RESET}"]
-        lines.extend(visible)
-        footer = self._render_footer()
-        if footer is not None:
-            lines.append(footer)
-        output = "\033[H\033[J" + "\n".join(lines[:rows])
+                visible = visible[:-1] + [
+                    _truncate_to_visible(
+                        f"{_DIM}[-- new output below --]{_RESET}", cols
+                    )
+                ]
+
+        output_parts: list[str] = []
+        if show_header:
+            output_parts.append(header)
+        output_parts.extend(visible)
+        if show_footer:
+            output_parts.append(footer)
+
+        output = "\033[H\033[J" + "\n".join(output_parts[:rows])
         sys.stdout.write(output)
         sys.stdout.flush()
 
-    def _render_body_lines(self, cols: int) -> list[str]:
-        if not self._entries:
-            return [f"{_YELLOW}Waiting for agent output...{_RESET}"]
+    def _render_body_lines_from(
+        self, entries: list[Entry], cols: int, is_waiting: bool
+    ) -> list[str]:
+        waiting = _truncate_to_visible(
+            f"{_YELLOW}Waiting for agent output...{_RESET}", cols
+        )
+        if not entries:
+            return [waiting]
         lines: list[str] = []
-        for entry in self._entries:
+        for entry in entries:
             for sub_line in entry.text.split("\n"):
                 if not sub_line:
                     lines.append("")
                 else:
-                    lines.append(sub_line[:cols])
+                    lines.append(_truncate_to_visible(sub_line, cols))
+        if is_waiting:
+            lines.append(waiting)
         return lines
 
     def _render_footer(self) -> str | None:
         if self._task_done.is_set():
-            return f"{_GREEN}Task completed. Press 'q' to exit.{_RESET}"
+            return f"{_GREEN}Task completed. Press 'q' to return.{_RESET}"
         if self._task_failed.is_set():
-            return f"{_RED}Task failed. Press 'q' to exit.{_RESET}"
+            return f"{_RED}Task failed. Press 'q' to return.{_RESET}"
         return None
 
-    def _render_header(self) -> str:
-        if self._current_round > 0:
+    def _render_header_with(self, current_round: int) -> str:
+        if current_round > 0:
             return (
                 f'{_BOLD}--- Task "{self.slug}" Round '
-                f"{self._current_round}/{self.total_rounds} (press 'q' to exit) ---{_RESET}"
+                f"{current_round}/{self.total_rounds} (press 'q' to return) ---{_RESET}"
             )
-        return f"{_BOLD}--- Task \"{self.slug}\" (press 'q' to exit) ---{_RESET}"
+        return f"{_BOLD}--- Task \"{self.slug}\" (press 'q' to return) ---{_RESET}"
+
+
+class ViewerController:
+    def __init__(self, viewer: TaskViewer) -> None:
+        self.viewer = viewer
+        self._thread: threading.Thread | None = None
+
+    def is_open(self) -> bool:
+        if self._thread is None:
+            return False
+        if self._thread.is_alive():
+            return True
+        self._thread.join(timeout=0)
+        self._thread = None
+        return False
+
+    def open(self) -> None:
+        if self.is_open():
+            return
+        self._thread = threading.Thread(target=self.viewer.run, daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        self.viewer.request_close()
+
+    def wait_closed(self, timeout: float | None = None) -> None:
+        if self._thread is None:
+            return
+        self._thread.join(timeout=timeout)
+        if not self._thread.is_alive():
+            self._thread = None
