@@ -222,6 +222,7 @@ class TaskRunnerInteractiveViewerTests(unittest.TestCase):
         fake_process = FakeProcess()
         fake_process.release.set()
         viewer_tools = []
+        viewer_log_paths = []
 
         class FakeViewer:
             def __init__(
@@ -229,8 +230,13 @@ class TaskRunnerInteractiveViewerTests(unittest.TestCase):
             ) -> None:
                 viewer_tools.append(tool)
 
-            def start_round(self, round_index: int, log_path: Path) -> None:
-                pass
+            def start_round(
+                self,
+                round_index: int,
+                log_path: Path,
+                viewer_log_path: Path | None = None,
+            ) -> None:
+                viewer_log_paths.append(viewer_log_path)
 
             def end_round(self, duration: float) -> None:
                 pass
@@ -282,6 +288,10 @@ class TaskRunnerInteractiveViewerTests(unittest.TestCase):
 
         self.assertFalse(result)
         self.assertEqual(viewer_tools, ["codex"])
+        self.assertEqual(len(viewer_log_paths), 1)
+        self.assertIsNotNone(viewer_log_paths[0])
+        assert viewer_log_paths[0] is not None
+        self.assertTrue(viewer_log_paths[0].name.endswith("-viewer.log"))
 
 
 class TaskRunnerRunTasksTests(unittest.TestCase):

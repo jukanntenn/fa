@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import re
 import select
 import shutil
 import sys
@@ -41,6 +42,7 @@ def _truncate(text: str, max_len: int = 200, preserve_newlines: bool = False) ->
 
 
 _ANSI_CSI_END = frozenset(chr(c) for c in range(0x40, 0x7F))
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _SGR_CLOSE_CATEGORIES = {
     "22": {"intensity"},
     "23": {"italic"},
@@ -52,6 +54,10 @@ _SGR_CLOSE_CATEGORIES = {
     "39": {"fg"},
     "49": {"bg"},
 }
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 def _update_active_sgr(params: str, active_sgr: set[str]) -> None:
@@ -355,6 +361,7 @@ class TaskViewer:
         self._scroll_offset = 0
         self._current_round = 0
         self._current_log: Path | None = None
+        self._viewer_log_path: Path | None = None
         self._last_log: Path | None = None
         self._log_offset = 0
         self._original_tty = None
@@ -363,27 +370,39 @@ class TaskViewer:
         self._close_requested = threading.Event()
         self._drain_lock = threading.Lock()
 
-    def start_round(self, round_index: int, log_path: Path) -> None:
+    def start_round(
+        self,
+        round_index: int,
+        log_path: Path,
+        viewer_log_path: Path | None = None,
+    ) -> None:
         with self._drain_lock:
             self._current_round = round_index
             self._current_log = log_path
+            self._viewer_log_path = viewer_log_path
             self._last_log = None
             self._log_offset = 0
             self._parser_state = {}
             text = (
                 f"{_DIM}--- Round {round_index}/{self.total_rounds} started ---{_RESET}"
             )
-            self._entries.append(Entry(round_index=round_index, text=text))
-            if self._scroll_offset > 0:
-                self._scroll_offset += text.count("\n") + 1
+            self._append_entry(Entry(round_index=round_index, text=text))
 
     def end_round(self, duration: float) -> None:
         with self._drain_lock:
             self._drain_current_log_unlocked()
             text = f"{_DIM}--- Round {self._current_round}/{self.total_rounds} completed ({duration:.1f}s) ---{_RESET}"
-            self._entries.append(Entry(round_index=self._current_round, text=text))
-            if self._scroll_offset > 0:
-                self._scroll_offset += text.count("\n") + 1
+            self._append_entry(Entry(round_index=self._current_round, text=text))
+
+    def _append_entry(self, entry: Entry) -> None:
+        self._entries.append(entry)
+        if self._scroll_offset > 0:
+            self._scroll_offset += entry.text.count("\n") + 1
+        if self._viewer_log_path is None:
+            return
+        self._viewer_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._viewer_log_path.open("a", encoding="utf-8") as file:
+            file.write(_strip_ansi(entry.text).rstrip() + "\n")
 
     def mark_failed(self) -> None:
         self._task_failed.set()
@@ -468,11 +487,7 @@ class TaskViewer:
         for raw_line in new_lines:
             formatted = self._parse_log_line(raw_line)
             if formatted is not None:
-                self._entries.append(
-                    Entry(round_index=self._current_round, text=formatted)
-                )
-                if self._scroll_offset > 0:
-                    self._scroll_offset += formatted.count("\n") + 1
+                self._append_entry(Entry(round_index=self._current_round, text=formatted))
 
     def _read_log_lines(self, path: Path, offset: int) -> list[str]:
         if not path.exists():

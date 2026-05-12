@@ -172,7 +172,8 @@ def _run_task_interactive(
                 tool,
             )
             log_path = log_dir / f"round-{round_index}-{tool}.log"
-            viewer.start_round(round_index, log_path)
+            viewer_log_path = log_path.with_name(f"{log_path.stem}-viewer.log")
+            viewer.start_round(round_index, log_path, viewer_log_path)
             cmd = _tool_cmd(tool, prompt)
             env = {**os.environ, **extra_env} if extra_env else None
             log_path.parent.mkdir(parents=True, exist_ok=True)

@@ -248,6 +248,37 @@ class TaskViewerStateTests(unittest.TestCase):
         self.assertEqual(viewer._current_round, 2)
         self.assertEqual(viewer._current_log, Path("round-2.log"))
 
+    def test_viewer_persists_round_markers_and_parsed_entries(self) -> None:
+        with TemporaryDirectory() as tempdir:
+            raw_log = Path(tempdir) / "round-1-claude.log"
+            viewer_log = Path(tempdir) / "round-1-claude-viewer.log"
+            raw_log.write_text(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [
+                                {"type": "text", "text": "hello from agent"}
+                            ]
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            viewer = TaskViewer("task", total_rounds=1, tool="claude")
+            viewer.start_round(1, raw_log, viewer_log)
+            viewer._drain_current_log()
+            viewer.end_round(0.1)
+
+            persisted = viewer_log.read_text(encoding="utf-8")
+
+        self.assertIn("Round 1/1 started", persisted)
+        self.assertIn("hello from agent", persisted)
+        self.assertIn("Round 1/1 completed", persisted)
+        self.assertNotIn("\x1b[", persisted)
+
     def test_body_lines_truncate_by_visible_width(self) -> None:
         viewer = TaskViewer("task", total_rounds=1)
         entries = [Entry(round_index=1, text="\033[31mabcdef")]

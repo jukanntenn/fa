@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import contextlib
 import difflib
+import json
 import logging
+import re
 import select
 import subprocess
 import sys
@@ -130,12 +132,12 @@ def _read_stdin() -> str:
         return text.strip()
     except ImportError:
         typer.echo(
-            "Warning: prompt_toolkit not installed, single-line input only.",
+            "Warning: prompt_toolkit not installed, finish input with Ctrl-D.",
             err=True,
         )
-        typer.echo("Enter intent brief or task ID: ", nl=False)
-        line = sys.stdin.readline()
-        return line.strip() if line else ""
+        typer.echo("Enter intent brief or task ID:")
+        text = sys.stdin.read()
+        return text.strip()
     except EOFError:
         return ""
 
@@ -153,8 +155,13 @@ def _tool_accepts_prompt_stdin(tool: str) -> bool:
     return tool in {"claude", "ccr"}
 
 
-def _build_tool_cmd_for_prompt(tool: str, prompt: str) -> tuple[list[str], str | None]:
+def _build_tool_cmd_for_prompt(
+    tool: str, prompt: str, prompt_path: Path | None = None
+) -> tuple[list[str], str | None]:
     if not _tool_accepts_prompt_stdin(tool):
+        if prompt_path is not None and (len(prompt) > 8000 or "\n" in prompt):
+            handoff = f"Read the full prompt from {prompt_path} and follow it exactly."
+            return _build_tool_cmd(tool, handoff), None
         return _build_tool_cmd(tool, prompt), None
     cmd = _build_tool_cmd(tool, "")
     return [part for part in cmd if part != ""], prompt
@@ -205,8 +212,9 @@ def _run_tool_with_optional_viewer(
     viewer: TaskViewer | None,
     round_index: int,
     viewer_controller: ViewerController | None = None,
+    prompt_path: Path | None = None,
 ) -> int | None:
-    cmd, prompt_stdin = _build_tool_cmd_for_prompt(tool, prompt)
+    cmd, prompt_stdin = _build_tool_cmd_for_prompt(tool, prompt, prompt_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     if viewer is None or tool not in _LIVE_VIEWER_TOOLS:
         try:
@@ -228,7 +236,8 @@ def _run_tool_with_optional_viewer(
     def _worker() -> None:
         nonlocal return_code
         started_at = time.monotonic()
-        viewer.start_round(round_index, log_path)
+        viewer_log_path = log_path.with_name(f"{log_path.stem}-viewer.log")
+        viewer.start_round(round_index, log_path, viewer_log_path)
         try:
             try:
                 with log_path.open("w", encoding="utf-8") as log_file:
@@ -277,6 +286,79 @@ def _find_new_parent_task(preexisting_ids: frozenset[int]) -> Task | None:
     if no_parent:
         return min(no_parent, key=lambda t: t.id)
     return min(new_tasks, key=lambda t: t.id)
+
+
+def _extract_text_from_create_log(log_path: Path, tool: str) -> str:
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if tool not in {"claude", "ccr"}:
+        return text
+
+    collected: list[str] = []
+    for line in text.splitlines():
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if obj.get("type") == "result" and isinstance(obj.get("result"), str):
+            collected.append(obj["result"])
+            continue
+        if obj.get("type") != "assistant":
+            continue
+        message = obj.get("message")
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            ):
+                collected.append(block["text"])
+    return "\n".join(collected)
+
+
+def _parse_task_reference(text: str) -> tuple[int, Path | None] | None:
+    candidates = re.findall(r"```json\s*(.*?)```", text, flags=re.DOTALL)
+    candidates.extend(
+        re.findall(r"\{[^{}]*\"task_id\"[^{}]*\}", text, flags=re.DOTALL)
+    )
+    for candidate in candidates:
+        try:
+            obj = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        task_id = obj.get("task_id")
+        if not isinstance(task_id, int):
+            continue
+        task_path = obj.get("task_path")
+        if isinstance(task_path, str) and task_path:
+            return task_id, Path(task_path)
+        return task_id, None
+    return None
+
+
+def _find_created_task(
+    preexisting_ids: frozenset[int], log_path: Path, tool: str
+) -> Task | None:
+    text = _extract_text_from_create_log(log_path, tool)
+    reference = _parse_task_reference(text)
+    if reference is not None:
+        task_id, task_path = reference
+        task = find_task(task_id)
+        if task is not None and task.id not in preexisting_ids:
+            if task_path is None or task.path.resolve() == task_path.resolve():
+                return task
+    return _find_new_parent_task(preexisting_ids)
 
 
 def _resolve_task_descendants(task: Task) -> list[Task]:
@@ -478,6 +560,8 @@ def gestate(
         gestate_log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         log_path = gestate_log_dir / f"gestate-create-{timestamp}.log"
+        prompt_path = gestate_log_dir / f"gestate-create-{timestamp}-prompt.md"
+        prompt_path.write_text(prompt, encoding="utf-8")
         logger.info("Creating task from intent brief using tool=%s", tool)
         result_code = _run_tool_with_optional_viewer(
             tool=tool,
@@ -487,6 +571,7 @@ def gestate(
             viewer=viewer,
             round_index=1,
             viewer_controller=viewer_controller,
+            prompt_path=prompt_path,
         )
         if result_code is None:
             typer.echo(f"Error: tool '{tool}' execution failed", err=True)
@@ -498,7 +583,7 @@ def gestate(
             if viewer is not None:
                 viewer.mark_failed()
             raise typer.Exit(code=1)
-        task = _find_new_parent_task(preexisting_ids)
+        task = _find_created_task(preexisting_ids, log_path, tool)
         if task is None:
             typer.echo("Error: no new task created by gestating tool", err=True)
             if viewer is not None:
@@ -543,6 +628,7 @@ def gestate(
             viewer=viewer,
             round_index=review_round_offset + round_num,
             viewer_controller=viewer_controller,
+            prompt_path=prompt_path,
         )
         if result_code is None:
             had_tool_failure = True

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import shutil
 from datetime import datetime
+from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -104,14 +106,43 @@ def rm(id_range: str, force: bool = typer.Option(False, "-f")) -> None:
         raise typer.Exit(code=1)
 
 
+def _dedupe_archive_roots(tasks: list[Task]) -> list[Task]:
+    selected_paths = {task.path.resolve() for task in tasks}
+    kept_paths: set[Path] = set()
+    kept_tasks: list[Task] = []
+    for task in sorted(tasks, key=lambda item: (len(item.path.parts), item.id)):
+        task_path = task.path.resolve()
+        if any(
+            ancestor in selected_paths and ancestor in kept_paths
+            for ancestor in task_path.parents
+        ):
+            continue
+        kept_paths.add(task_path)
+        kept_tasks.append(task)
+    return sorted(kept_tasks, key=lambda item: item.id)
+
+
 @task_app.command("archive")
-def archive(id_range: str) -> None:
-    ids = parse_id_range(id_range)
+def archive(id_range: Annotated[str | None, typer.Argument()] = None) -> None:
     now = datetime.now()
     month_dir = archive_dir() / now.strftime("%Y-%m")
     month_dir.mkdir(parents=True, exist_ok=True)
     has_error = False
-    for task_id in ids:
+
+    if id_range is None:
+        completed_tasks = sorted(
+            [task for task in all_tasks().values() if task.status == "completed"],
+            key=lambda task: task.id,
+        )
+        if not completed_tasks:
+            typer.echo("No completed tasks to archive")
+            return
+        for task in _dedupe_archive_roots(completed_tasks):
+            shutil.move(str(task.path), str(month_dir / task.path.name))
+        return
+
+    tasks_to_archive: list[Task] = []
+    for task_id in parse_id_range(id_range):
         task = find_task(task_id)
         if task is None:
             has_error = True
@@ -121,6 +152,8 @@ def archive(id_range: str) -> None:
             has_error = True
             typer.echo(f"Error: task {task_id} is not completed", err=True)
             continue
+        tasks_to_archive.append(task)
+    for task in _dedupe_archive_roots(tasks_to_archive):
         shutil.move(str(task.path), str(month_dir / task.path.name))
     if has_error:
         raise typer.Exit(code=1)

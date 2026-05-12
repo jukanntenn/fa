@@ -60,6 +60,21 @@ def all_tasks() -> dict[int, Task]:
     return result
 
 
+def all_task_ids(include_archive: bool = False) -> set[int]:
+    root = tasks_dir()
+    result: set[int] = set()
+    for task_json in root.rglob(TASK_JSON_FILE_NAME):
+        if not include_archive and ARCHIVE_DIR_NAME in task_json.parts:
+            continue
+        data = _read_json(task_json)
+        if not data:
+            continue
+        task_id = data.get("id")
+        if isinstance(task_id, int):
+            result.add(task_id)
+    return result
+
+
 def find_task(task_id: int) -> Task | None:
     return all_tasks().get(task_id)
 
@@ -70,11 +85,11 @@ def find_children(parent_id: int) -> list[Task]:
 
 def next_task_id(parent_id: int | None = None) -> int:
     tasks = all_tasks()
-    if not tasks:
+    used_ids = all_task_ids(include_archive=True)
+    if not used_ids:
         return 1
     if parent_id is None or parent_id not in tasks:
-        return max(tasks.keys()) + 1
-    used_ids = set(tasks)
+        return max(used_ids) + 1
     candidate = parent_id + 1
     while candidate in used_ids:
         candidate += 1
