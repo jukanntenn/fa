@@ -4,6 +4,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from fa.core.logview import (
@@ -12,6 +13,7 @@ from fa.core.logview import (
     TaskViewer,
     ViewerController,
     _truncate_to_visible,
+    parse_codex_line,
     parse_jsonl_line,
 )
 
@@ -69,6 +71,118 @@ class ResultFormattingTests(unittest.TestCase):
             self.fail("Expected result message to be formatted")
         self.assertIn(long_result, formatted)
         self.assertTrue(formatted.endswith(long_result))
+
+
+class CodexFormattingTests(unittest.TestCase):
+    def test_codex_metadata_renders_compact_header(self) -> None:
+        result = parse_codex_line("OpenAI Codex v0.125.0 (research preview)", {})
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIn("[codex]", result)
+        self.assertIn("OpenAI Codex v0.125.0", result)
+
+    def test_codex_suppresses_user_prompt_body(self) -> None:
+        state: dict[str, str] = {}
+
+        self.assertIsNone(parse_codex_line("user", state))
+        self.assertIsNone(parse_codex_line("# Task Information", state))
+
+    def test_codex_formats_assistant_text(self) -> None:
+        state: dict[str, str] = {}
+
+        parse_codex_line("codex", state)
+        result = parse_codex_line("I’ll inspect the code now.", state)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIn("[codex]", result)
+        self.assertIn("inspect the code", result)
+
+    def test_codex_formats_exec_command_and_success(self) -> None:
+        state: dict[str, str] = {}
+
+        parse_codex_line("exec", state)
+        command = parse_codex_line(
+            '/usr/bin/zsh -lc "pytest" in /home/alice/Workspace/fa', state
+        )
+        success = parse_codex_line(" succeeded in 0ms:", state)
+
+        self.assertIsNotNone(command)
+        self.assertIsNotNone(success)
+        assert command is not None
+        assert success is not None
+        self.assertIn("[tool: exec]", command)
+        self.assertIn("pytest", command)
+        self.assertIn("[exec succeeded]", success)
+
+    def test_codex_formats_exec_success_after_codex_marker(self) -> None:
+        state: dict[str, str] = {}
+
+        parse_codex_line("exec", state)
+        parse_codex_line('/usr/bin/zsh -lc "pytest" in /home/alice/Workspace/fa', state)
+        parse_codex_line("codex", state)
+        success = parse_codex_line(" succeeded in 0ms:", state)
+
+        self.assertIsNotNone(success)
+        assert success is not None
+        self.assertIn("[exec succeeded]", success)
+        self.assertNotIn("[codex]", success)
+
+    def test_codex_preserves_exec_output_until_next_role_marker(self) -> None:
+        state: dict[str, str] = {}
+
+        parse_codex_line("exec", state)
+        parse_codex_line('/usr/bin/zsh -lc "pytest" in /home/alice/Workspace/fa', state)
+        parse_codex_line(" succeeded in 0ms:", state)
+        output = parse_codex_line("all passed", state)
+        parse_codex_line("codex", state)
+        done = parse_codex_line("Done.", state)
+
+        self.assertIsNotNone(output)
+        self.assertIsNotNone(done)
+        assert output is not None
+        assert done is not None
+        self.assertIn("all passed", output)
+        self.assertNotIn("[codex]", output)
+        self.assertIn("[codex]", done)
+        self.assertIn("Done.", done)
+
+    def test_task_viewer_drains_codex_log_with_codex_parser(self) -> None:
+        with TemporaryDirectory() as tempdir:
+            log_path = Path(tempdir) / "round.log"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        "OpenAI Codex v0.125.0 (research preview)",
+                        "user",
+                        "hidden prompt",
+                        "codex",
+                        "I’ll inspect the code now.",
+                        "exec",
+                        '/usr/bin/zsh -lc "pytest" in /home/alice/Workspace/fa',
+                        "codex",
+                        " succeeded in 0ms:",
+                        "all passed",
+                        "codex",
+                        "Done.",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            viewer = TaskViewer("task", total_rounds=1, tool="codex")
+            viewer.start_round(1, log_path)
+            viewer._drain_current_log()
+
+        entries = "\n".join(entry.text for entry in viewer._entries)
+        self.assertIn("[codex]", entries)
+        self.assertIn("inspect the code", entries)
+        self.assertIn("[tool: exec]", entries)
+        self.assertIn("[exec succeeded]", entries)
+        self.assertIn("all passed", entries)
+        self.assertIn("Done.", entries)
+        self.assertNotIn("hidden prompt", entries)
 
 
 class TaskViewerStateTests(unittest.TestCase):

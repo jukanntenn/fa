@@ -1,4 +1,5 @@
 import io
+import subprocess
 import time
 import unittest
 from pathlib import Path
@@ -6,7 +7,6 @@ from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 import typer
-
 from typer.testing import CliRunner
 
 from fa.core.logview import TaskViewer, ViewerController
@@ -36,7 +36,7 @@ class GestatePromptTests(unittest.TestCase):
         self.assertNotEqual(cmd[-1], "")
         self.assertFalse(any(prompt in part for part in cmd))
 
-    def test_non_stream_tool_keeps_existing_argv_prompt(self) -> None:
+    def test_codex_keeps_existing_argv_prompt(self) -> None:
         prompt = "short prompt"
 
         cmd, prompt_stdin = gestate_commands._build_tool_cmd_for_prompt("codex", prompt)
@@ -164,16 +164,17 @@ class GestateArtifactDiffTests(unittest.TestCase):
 
 class GestateRunnerTests(unittest.TestCase):
     def test_non_stream_runner_uses_subprocess_run_without_viewer(self) -> None:
+        viewer = TaskViewer("gestate", total_rounds=1, tool="opencode")
         with TemporaryDirectory() as tempdir:
             with patch("fa.gestate.commands.subprocess.run") as run:
                 run.return_value.returncode = 0
 
                 result = gestate_commands._run_tool_with_optional_viewer(
-                    tool="codex",
+                    tool="opencode",
                     prompt="hello",
                     log_path=Path(tempdir) / "run.log",
                     logger=Mock(),
-                    viewer=None,
+                    viewer=viewer,
                     round_index=1,
                 )
 
@@ -224,6 +225,42 @@ class GestateRunnerTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(fake_process.input, "hello")
+        entries = "\n".join(entry.text for entry in viewer._entries)
+        self.assertIn("Round 1/1 started", entries)
+        self.assertIn("Round 1/1 completed", entries)
+
+    def test_codex_runner_starts_and_ends_viewer_round_when_not_tty(self) -> None:
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.returncode = 0
+                self.input: str | None = None
+
+            def communicate(self, input: str | None = None) -> None:
+                self.input = input
+
+        fake_process = FakeProcess()
+        viewer = TaskViewer("gestate", total_rounds=1, tool="codex")
+        with TemporaryDirectory() as tempdir:
+            with (
+                patch("fa.gestate.commands.sys.stdin.isatty", return_value=False),
+                patch(
+                    "fa.gestate.commands.subprocess.Popen",
+                    return_value=fake_process,
+                ) as popen,
+            ):
+                result = gestate_commands._run_tool_with_optional_viewer(
+                    tool="codex",
+                    prompt="hello",
+                    log_path=Path(tempdir) / "round.log",
+                    logger=Mock(),
+                    viewer=viewer,
+                    round_index=1,
+                )
+
+        self.assertEqual(result, 0)
+        self.assertIsNone(fake_process.input)
+        self.assertIn("hello", popen.call_args.args[0])
+        self.assertIs(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
         entries = "\n".join(entry.text for entry in viewer._entries)
         self.assertIn("Round 1/1 started", entries)
         self.assertIn("Round 1/1 completed", entries)
@@ -446,7 +483,9 @@ class GestateAutoRunTests(unittest.TestCase):
                 task.transition_to("approved")
                 save_task(task)
 
-                with patch("fa.gestate.commands.run_tasks", return_value=0) as run_tasks:
+                with patch(
+                    "fa.gestate.commands.run_tasks", return_value=0
+                ) as run_tasks:
                     result = gestate_commands._run_runnable_task_tree(
                         task, Mock(), "claude", 3, False, open_viewer=True
                     )
@@ -570,8 +609,8 @@ class GestateAutoRunTests(unittest.TestCase):
     def _invoke_gestate_for_auto_run(self, *args: str) -> tuple[object, object]:
         with TemporaryDirectory() as tempdir:
             with patch("fa.task.storage.find_project_root", return_value=Path(tempdir)):
-                from fa.task.storage import create_task
                 from fa.cli import app, app_state
+                from fa.task.storage import create_task
 
                 task = create_task("single")
                 (task.path / "spec.md").write_text("spec", encoding="utf-8")
@@ -783,11 +822,60 @@ class GestateAutoRunTests(unittest.TestCase):
                         tool="claude",
                         max_rounds=1,
                         run=True,
-                        run_tool="codex",
+                        run_tool="opencode",
                     )
 
         run_tree.assert_called_once()
         self.assertFalse(run_tree.call_args.kwargs["open_viewer"])
+        self.assertTrue(FakeController.close_called)
+        self.assertTrue(FakeController.wait_closed_called)
+
+    def test_gestate_auto_run_hands_off_to_codex_viewer(self) -> None:
+        class FakeController:
+            close_called = False
+            wait_closed_called = False
+
+            def __init__(self, viewer: TaskViewer) -> None:
+                self.viewer = viewer
+
+            def is_open(self) -> bool:
+                return True
+
+            def close(self) -> None:
+                type(self).close_called = True
+
+            def wait_closed(self, timeout: float | None = None) -> None:
+                type(self).wait_closed_called = True
+
+        with TemporaryDirectory() as tempdir:
+            with patch("fa.task.storage.find_project_root", return_value=Path(tempdir)):
+                from fa.task.storage import create_task
+
+                task = create_task("single")
+                (task.path / "spec.md").write_text("spec", encoding="utf-8")
+                (task.path / "plan.md").write_text("plan", encoding="utf-8")
+
+                with (
+                    patch(
+                        "fa.gestate.commands._run_tool_with_optional_viewer",
+                        return_value=0,
+                    ),
+                    patch("fa.gestate.commands.ViewerController", FakeController),
+                    patch(
+                        "fa.gestate.commands._run_runnable_task_tree",
+                        return_value=0,
+                    ) as run_tree,
+                ):
+                    gestate_commands.gestate(
+                        str(task.id),
+                        tool="claude",
+                        max_rounds=1,
+                        run=True,
+                        run_tool="codex",
+                    )
+
+        run_tree.assert_called_once()
+        self.assertTrue(run_tree.call_args.kwargs["open_viewer"])
         self.assertTrue(FakeController.close_called)
         self.assertTrue(FakeController.wait_closed_called)
 

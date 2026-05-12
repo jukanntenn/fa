@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fa.core.config import AGENT_LOGS_DIR_NAME, LOGS_DIR_NAME, TOOL_COMMANDS
-from fa.core.logview import _STREAM_JSON_TOOLS, TaskViewer, ViewerController
+from fa.core.logview import _LIVE_VIEWER_TOOLS, TaskViewer, ViewerController
 from fa.core.quota import check_glm_quota
 from fa.task.model import Task
 from fa.task.prompt import build_task_prompt, infer_attempt, infer_memory_sequence
@@ -133,7 +133,7 @@ def _run_task_interactive(
     log_dir: Path,
     open_viewer: bool = False,
 ) -> bool:
-    viewer = TaskViewer(slug=task.slug, total_rounds=rounds)
+    viewer = TaskViewer(slug=task.slug, total_rounds=rounds, tool=tool)
     viewer_controller = ViewerController(viewer)
     failed = False
 
@@ -331,7 +331,7 @@ def run_tasks(
     plan = ids
     logger.info("Execution plan: %d tasks %s", len(plan), plan)
     has_failure = False
-    open_viewer_for_next_stream_task = open_viewer
+    open_viewer_for_next_live_task = open_viewer
     for task_id in plan:
         task = all_tasks().get(task_id)
         if task is None:
@@ -352,7 +352,7 @@ def run_tasks(
         logger.info('Task [%d] "%s" started', task.id, task.slug)
         failed = False
         log_dir = _task_log_dir(task)
-        if tool in _STREAM_JSON_TOOLS:
+        if tool in _LIVE_VIEWER_TOOLS:
             failed = _run_task_interactive(
                 task=task,
                 parent=parent,
@@ -363,9 +363,9 @@ def run_tasks(
                 attempt_mode=attempt_mode,
                 glm_plan=glm_plan,
                 log_dir=log_dir,
-                open_viewer=open_viewer_for_next_stream_task,
+                open_viewer=open_viewer_for_next_live_task,
             )
-            open_viewer_for_next_stream_task = False
+            open_viewer_for_next_live_task = False
             if failed:
                 has_failure = True
         else:

@@ -20,7 +20,11 @@ from fa.core.config import (
     LOGS_DIR_NAME,
     TOOL_COMMANDS,
 )
-from fa.core.logview import _STREAM_JSON_TOOLS, TaskViewer, ViewerController
+from fa.core.logview import (
+    _LIVE_VIEWER_TOOLS,
+    TaskViewer,
+    ViewerController,
+)
 from fa.task.model import Task
 from fa.task.runner import build_execution_plan, run_tasks
 from fa.task.storage import (
@@ -204,7 +208,7 @@ def _run_tool_with_optional_viewer(
 ) -> int | None:
     cmd, prompt_stdin = _build_tool_cmd_for_prompt(tool, prompt)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    if viewer is None or tool not in _STREAM_JSON_TOOLS:
+    if viewer is None or tool not in _LIVE_VIEWER_TOOLS:
         try:
             with log_path.open("w", encoding="utf-8") as log_file:
                 result = subprocess.run(
@@ -450,8 +454,12 @@ def gestate(
 
     create_phase_rounds = 0 if _is_task_id(input_text) else 1
     viewer = (
-        TaskViewer(slug="gestate", total_rounds=max_rounds + create_phase_rounds)
-        if tool in _STREAM_JSON_TOOLS
+        TaskViewer(
+            slug="gestate",
+            total_rounds=max_rounds + create_phase_rounds,
+            tool=tool,
+        )
+        if tool in _LIVE_VIEWER_TOOLS
         else None
     )
     viewer_controller = ViewerController(viewer) if viewer is not None else None
@@ -593,8 +601,9 @@ def gestate(
                 viewer_controller is not None and viewer_controller.is_open()
             )
             should_close_viewer = handoff_open_viewer
-            handoff_open_viewer = handoff_open_viewer and run_tool in _STREAM_JSON_TOOLS
+            handoff_open_viewer = handoff_open_viewer and run_tool in _LIVE_VIEWER_TOOLS
             if should_close_viewer:
+                assert viewer_controller is not None
                 viewer_controller.close()
                 viewer_controller.wait_closed()
             exit_code = _run_runnable_task_tree(

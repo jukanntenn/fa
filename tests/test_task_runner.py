@@ -65,7 +65,9 @@ class TaskRunnerInteractiveViewerTests(unittest.TestCase):
                 patch("fa.task.runner.sys.stdin.isatty", return_value=True),
                 patch("fa.task.runner.subprocess.Popen", return_value=fake_process),
                 patch("fa.task.runner.ViewerController", FakeController),
-                patch("fa.task.runner._read_main_session_key", side_effect=fake_read_key),
+                patch(
+                    "fa.task.runner._read_main_session_key", side_effect=fake_read_key
+                ),
                 patch("fa.task.runner.build_task_prompt", return_value="prompt"),
             ):
                 result = runner._run_task_interactive(
@@ -130,7 +132,9 @@ class TaskRunnerInteractiveViewerTests(unittest.TestCase):
                 patch("fa.task.runner.sys.stdin.isatty", return_value=True),
                 patch("fa.task.runner.subprocess.Popen", return_value=fake_process),
                 patch("fa.task.runner.ViewerController", FakeController),
-                patch("fa.task.runner._read_main_session_key", side_effect=fake_read_key),
+                patch(
+                    "fa.task.runner._read_main_session_key", side_effect=fake_read_key
+                ),
                 patch("fa.task.runner.build_task_prompt", return_value="prompt"),
             ):
                 result = runner._run_task_interactive(
@@ -191,7 +195,9 @@ class TaskRunnerInteractiveViewerTests(unittest.TestCase):
                 patch("fa.task.runner.sys.stdin.isatty", return_value=True),
                 patch("fa.task.runner.subprocess.Popen", return_value=fake_process),
                 patch("fa.task.runner.ViewerController", FakeController),
-                patch("fa.task.runner._read_main_session_key", side_effect=fake_read_key),
+                patch(
+                    "fa.task.runner._read_main_session_key", side_effect=fake_read_key
+                ),
                 patch("fa.task.runner.build_task_prompt", return_value="prompt"),
             ):
                 result = runner._run_task_interactive(
@@ -212,6 +218,71 @@ class TaskRunnerInteractiveViewerTests(unittest.TestCase):
         self.assertEqual(controllers[0].open_count, 2)
         self.assertTrue(controllers[0].wait_closed_called)
 
+    def test_run_task_interactive_passes_codex_tool_to_task_viewer(self) -> None:
+        fake_process = FakeProcess()
+        fake_process.release.set()
+        viewer_tools = []
+
+        class FakeViewer:
+            def __init__(
+                self, slug: str, total_rounds: int, tool: str = "claude"
+            ) -> None:
+                viewer_tools.append(tool)
+
+            def start_round(self, round_index: int, log_path: Path) -> None:
+                pass
+
+            def end_round(self, duration: float) -> None:
+                pass
+
+            def mark_done(self) -> None:
+                pass
+
+            def mark_failed(self) -> None:
+                pass
+
+            def _drain_current_log(self) -> None:
+                pass
+
+        class FakeController:
+            def __init__(self, viewer: FakeViewer) -> None:
+                self.viewer = viewer
+
+            def open(self) -> None:
+                pass
+
+            def is_open(self) -> bool:
+                return False
+
+            def wait_closed(self, timeout=None) -> None:
+                pass
+
+        with TemporaryDirectory() as tempdir:
+            task = self._create_approved_task(tempdir)
+            log_dir = Path(tempdir) / "logs"
+            with (
+                patch.object(storage, "find_project_root", return_value=Path(tempdir)),
+                patch("fa.task.runner.sys.stdin.isatty", return_value=False),
+                patch("fa.task.runner.subprocess.Popen", return_value=fake_process),
+                patch("fa.task.runner.TaskViewer", FakeViewer),
+                patch("fa.task.runner.ViewerController", FakeController),
+                patch("fa.task.runner.build_task_prompt", return_value="prompt"),
+            ):
+                result = runner._run_task_interactive(
+                    task=task,
+                    parent=None,
+                    tool="codex",
+                    rounds=1,
+                    logger=logging.getLogger("test"),
+                    extra_env=None,
+                    attempt_mode=False,
+                    glm_plan=False,
+                    log_dir=log_dir,
+                )
+
+        self.assertFalse(result)
+        self.assertEqual(viewer_tools, ["codex"])
+
 
 class TaskRunnerRunTasksTests(unittest.TestCase):
     def test_run_tasks_passes_open_viewer_only_to_first_interactive_task(self) -> None:
@@ -227,7 +298,9 @@ class TaskRunnerRunTasksTests(unittest.TestCase):
 
                 with (
                     patch("fa.task.runner.build_task_prompt", return_value="prompt"),
-                    patch("fa.task.runner._run_task_interactive", return_value=False) as run_interactive,
+                    patch(
+                        "fa.task.runner._run_task_interactive", return_value=False
+                    ) as run_interactive,
                 ):
                     result = runner.run_tasks(
                         logger=logging.getLogger("test"),
@@ -244,6 +317,38 @@ class TaskRunnerRunTasksTests(unittest.TestCase):
         self.assertEqual(run_interactive.call_count, 2)
         self.assertTrue(run_interactive.call_args_list[0].kwargs["open_viewer"])
         self.assertFalse(run_interactive.call_args_list[1].kwargs["open_viewer"])
+
+    def test_run_tasks_uses_interactive_viewer_for_codex(self) -> None:
+        with TemporaryDirectory() as tempdir:
+            with patch.object(storage, "find_project_root", return_value=Path(tempdir)):
+                task = storage.create_task("single")
+                (task.path / "spec.md").write_text("spec", encoding="utf-8")
+                (task.path / "plan.md").write_text("plan", encoding="utf-8")
+                task.transition_to("approved")
+                storage.save_task(task)
+
+                with (
+                    patch("fa.task.runner.build_task_prompt", return_value="prompt"),
+                    patch(
+                        "fa.task.runner._run_task_interactive",
+                        return_value=False,
+                    ) as run_interactive,
+                ):
+                    result = runner.run_tasks(
+                        logger=logging.getLogger("test"),
+                        ids=[task.id],
+                        force=False,
+                        tool="codex",
+                        rounds=1,
+                        glm_plan=False,
+                        attempt_mode=False,
+                        open_viewer=True,
+                    )
+
+        self.assertEqual(result, 0)
+        run_interactive.assert_called_once()
+        self.assertEqual(run_interactive.call_args.kwargs["tool"], "codex")
+        self.assertTrue(run_interactive.call_args.kwargs["open_viewer"])
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ _CYAN = "\033[36m"
 _YELLOW = "\033[33m"
 
 _STREAM_JSON_TOOLS = {"claude", "ccr"}
+_LIVE_VIEWER_TOOLS = {"claude", "ccr", "codex"}
 
 
 @dataclasses.dataclass
@@ -247,6 +248,85 @@ def _format_result(obj: dict) -> str:
     return f"{_BOLD}{_RED}[failed{duration_str}]{_RESET}\n{result}"
 
 
+def parse_codex_line(line: str, state: dict[str, str] | None = None) -> str | None:
+    raw = line.rstrip("\n")
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    if state is None:
+        state = {}
+    if stripped == "user":
+        state["section"] = "user"
+        state.pop("exec_command_seen", None)
+        state.pop("exec_output_seen", None)
+        return None
+    if stripped == "codex":
+        state["section"] = "codex"
+        if state.get("exec_output_seen") == "1":
+            state.pop("exec_command_seen", None)
+            state.pop("exec_output_seen", None)
+        return None
+    if stripped == "exec":
+        state["section"] = "exec"
+        state.pop("exec_command_seen", None)
+        state.pop("exec_output_seen", None)
+        return None
+    if stripped.startswith("OpenAI Codex "):
+        state["section"] = "metadata"
+        state.pop("exec_command_seen", None)
+        state.pop("exec_output_seen", None)
+        if state.get("codex_header_seen") == "1":
+            return None
+        state["codex_header_seen"] = "1"
+        return f"{_DIM}[codex] {_truncate(stripped, 160)}{_RESET}"
+    if stripped == "--------":
+        return None
+    if state.get("exec_command_seen") == "1" and raw.startswith(" "):
+        lowered = stripped.lower()
+        state["exec_output_seen"] = "1"
+        if stripped.startswith("succeeded in "):
+            return f"{_BOLD}{_GREEN}[exec succeeded] {_truncate(stripped, 160)}{_RESET}"
+        if "failed" in lowered or "error" in lowered or "timed out" in lowered:
+            return f"{_BOLD}{_RED}[exec failed] {_truncate(stripped, 200)}{_RESET}"
+        return _truncate(raw, 4000, preserve_newlines=True)
+    if state.get("exec_output_seen") == "1":
+        return _truncate(raw, 4000, preserve_newlines=True)
+
+    section = state.get("section", "metadata")
+    lowered = stripped.lower()
+    if section in {"metadata", "user"} and (
+        "api error" in lowered
+        or "error:" in lowered
+        or lowered.startswith("failed")
+        or "timed out" in lowered
+    ):
+        return f"{_BOLD}{_RED}[codex error]{_RESET} {_truncate(stripped, 4000, preserve_newlines=True)}"
+    if section == "user":
+        return None
+    if section == "metadata" and ":" in stripped:
+        metadata_prefixes = (
+            "workdir:",
+            "model:",
+            "provider:",
+            "approval:",
+            "sandbox:",
+            "reasoning effort:",
+            "reasoning summaries:",
+            "session id:",
+        )
+        if lowered.startswith(metadata_prefixes):
+            return None
+    if section == "exec":
+        if state.get("exec_command_seen") != "1":
+            state["exec_command_seen"] = "1"
+            state.pop("exec_output_seen", None)
+            return f"{_BOLD}{_CYAN}[tool: exec]{_RESET} {_truncate(stripped, 220)}"
+        return _truncate(raw, 4000, preserve_newlines=True)
+    if section == "codex":
+        return f"{_BOLD}{_CYAN}[codex]{_RESET} {_truncate(stripped, 4000, preserve_newlines=True)}"
+    return None
+
+
 def _tool_input_summary(name: str, inp: dict) -> str:
     if name == "Read" and "file_path" in inp:
         return inp["file_path"]
@@ -266,9 +346,11 @@ def _tool_input_summary(name: str, inp: dict) -> str:
 
 
 class TaskViewer:
-    def __init__(self, slug: str, total_rounds: int) -> None:
+    def __init__(self, slug: str, total_rounds: int, tool: str = "claude") -> None:
         self.slug = slug
         self.total_rounds = total_rounds
+        self.tool = tool
+        self._parser_state: dict[str, str] = {}
         self._entries: list[Entry] = []
         self._scroll_offset = 0
         self._current_round = 0
@@ -287,6 +369,7 @@ class TaskViewer:
             self._current_log = log_path
             self._last_log = None
             self._log_offset = 0
+            self._parser_state = {}
             text = (
                 f"{_DIM}--- Round {round_index}/{self.total_rounds} started ---{_RESET}"
             )
@@ -367,6 +450,11 @@ class TaskViewer:
         with self._drain_lock:
             self._drain_current_log_unlocked()
 
+    def _parse_log_line(self, raw_line: str) -> str | None:
+        if self.tool == "codex":
+            return parse_codex_line(raw_line, self._parser_state)
+        return parse_jsonl_line(raw_line)
+
     def _drain_current_log_unlocked(self) -> None:
         if self._current_log is None:
             return
@@ -378,7 +466,7 @@ class TaskViewer:
             return
         self._log_offset += sum(len(line.encode("utf-8")) + 1 for line in new_lines)
         for raw_line in new_lines:
-            formatted = parse_jsonl_line(raw_line)
+            formatted = self._parse_log_line(raw_line)
             if formatted is not None:
                 self._entries.append(
                     Entry(round_index=self._current_round, text=formatted)
