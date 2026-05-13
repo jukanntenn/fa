@@ -1,505 +1,55 @@
 from __future__ import annotations
 
-import contextlib
-import difflib
-import json
 import logging
-import re
-import select
-import subprocess
-import sys
-import threading
-import time
 from datetime import datetime
-from pathlib import Path
 from typing import cast
 
 import typer
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from fa.core.config import (
-    AGENT_LOGS_DIR_NAME,
-    LOGS_DIR_NAME,
-    TOOL_COMMANDS,
-)
-from fa.core.logview import (
-    _LIVE_VIEWER_TOOLS,
-    TaskViewer,
-    ViewerController,
+from fa.core.config import AGENT_LOGS_DIR_NAME, LOGS_DIR_NAME
+from fa.core.logview import _LIVE_VIEWER_TOOLS, TaskViewer, ViewerController
+from fa.gestate.artifacts import _capture_artifact_snapshot, _print_round_artifact_diff
+from fa.gestate.prompting import _build_tool_cmd_for_prompt, _is_task_id, _read_stdin
+from fa.gestate.review import _build_review_prompt
+from fa.gestate.runner import _run_tool_with_optional_viewer
+from fa.gestate.tasks import (
+    _approve_task_descendants,
+    _extract_text_from_create_log,
+    _find_created_task,
+    _find_new_parent_task,
+    _parse_task_reference,
+    _resolve_execution_candidates,
+    _resolve_task_descendants,
+    _resolve_to_leaves,
+    _run_runnable_task_tree,
+    _validate_task,
 )
 from fa.task.model import Task
-from fa.task.runner import build_execution_plan, run_tasks
-from fa.task.storage import (
-    all_tasks,
-    fa_dir,
-    find_children,
-    find_task,
-    relative_path,
-    save_task,
-)
+from fa.task.storage import all_tasks, fa_dir, find_task, relative_path, save_task
 
-ArtifactSnapshot = dict[str, str]
+__all__ = [
+    "_approve_task_descendants",
+    "_build_review_prompt",
+    "_build_tool_cmd_for_prompt",
+    "_capture_artifact_snapshot",
+    "_extract_text_from_create_log",
+    "_find_created_task",
+    "_find_new_parent_task",
+    "_format_artifact_diff",
+    "_is_task_id",
+    "_parse_task_reference",
+    "_print_round_artifact_diff",
+    "_read_stdin",
+    "_resolve_execution_candidates",
+    "_resolve_task_descendants",
+    "_resolve_to_leaves",
+    "_run_runnable_task_tree",
+    "_run_tool_with_optional_viewer",
+    "_validate_task",
+    "gestate",
+]
 
-
-def _artifact_files(task_path: Path) -> list[Path]:
-    files: list[Path] = []
-    for pattern in ("spec.md", "plan.md"):
-        files.extend(
-            file_path for file_path in task_path.rglob(pattern) if file_path.is_file()
-        )
-    return sorted(files, key=lambda path: path.relative_to(task_path).as_posix())
-
-
-def _capture_artifact_snapshot(task_path: Path) -> ArtifactSnapshot:
-    snapshot: ArtifactSnapshot = {}
-    for file_path in _artifact_files(task_path):
-        relative = file_path.relative_to(task_path).as_posix()
-        snapshot[relative] = file_path.read_text(encoding="utf-8")
-    return snapshot
-
-
-def _format_artifact_diff(before: ArtifactSnapshot, after: ArtifactSnapshot) -> str:
-    chunks: list[str] = []
-    for relative in sorted(set(before) | set(after)):
-        old_text = before.get(relative)
-        new_text = after.get(relative)
-        if old_text == new_text:
-            continue
-        old_lines = [] if old_text is None else old_text.splitlines(keepends=True)
-        new_lines = [] if new_text is None else new_text.splitlines(keepends=True)
-        diff_lines = list(
-            difflib.unified_diff(
-                old_lines,
-                new_lines,
-                fromfile=f"before/{relative}",
-                tofile=f"after/{relative}",
-                lineterm="\n",
-            )
-        )
-        diff_lines = [
-            line if line.endswith("\n") else f"{line}\n" for line in diff_lines
-        ]
-        if diff_lines:
-            chunks.extend(diff_lines)
-        else:
-            chunks.extend([f"--- before/{relative}\n", f"+++ after/{relative}\n"])
-    return "".join(chunks)
-
-
-def _print_round_artifact_diff(
-    round_num: int,
-    before: ArtifactSnapshot,
-    after: ArtifactSnapshot,
-) -> None:
-    diff = _format_artifact_diff(before, after)
-    if diff:
-        typer.echo(f"\nRound {round_num} artifact diff:\n{diff}")
-    else:
-        typer.echo(f"Round {round_num}: no artifact changes")
-
-
-def _is_task_id(value: str) -> bool:
-    try:
-        task_id = int(value.strip())
-    except ValueError:
-        return False
-    return find_task(task_id) is not None
-
-
-def _read_stdin() -> str:
-    if not sys.stdin.isatty():
-        return sys.stdin.read().strip()
-    try:
-        from prompt_toolkit import prompt as pt_prompt
-        from prompt_toolkit.key_binding import KeyBindings
-
-        kb = KeyBindings()
-
-        @kb.add("enter")
-        def _(event):
-            buf = event.app.current_buffer
-            if buf.text.strip() and buf.document.current_line.strip() == "":
-                buf.validate_and_handle()
-            else:
-                buf.newline(copy_margin=False)
-
-        typer.echo("  (Press Enter on blank line to submit)")
-        text = pt_prompt(
-            "Enter intent brief or task ID:\n> ",
-            multiline=True,
-            key_bindings=kb,
-        )
-        return text.strip()
-    except ImportError:
-        typer.echo(
-            "Warning: prompt_toolkit not installed, finish input with Ctrl-D.",
-            err=True,
-        )
-        typer.echo("Enter intent brief or task ID:")
-        text = sys.stdin.read()
-        return text.strip()
-    except EOFError:
-        return ""
-
-
-def _build_tool_cmd(tool: str, prompt: str) -> list[str]:
-    if tool not in TOOL_COMMANDS:
-        raise ValueError(
-            f"unknown tool '{tool}'. Available: {', '.join(TOOL_COMMANDS.keys())}"
-        )
-    template = TOOL_COMMANDS[tool]
-    return [part.format(prompt=prompt) for part in template]
-
-
-def _tool_accepts_prompt_stdin(tool: str) -> bool:
-    return tool in {"claude", "ccr"}
-
-
-def _build_tool_cmd_for_prompt(
-    tool: str, prompt: str, prompt_path: Path | None = None
-) -> tuple[list[str], str | None]:
-    if not _tool_accepts_prompt_stdin(tool):
-        if prompt_path is not None and (len(prompt) > 8000 or "\n" in prompt):
-            handoff = f"Read the full prompt from {prompt_path} and follow it exactly."
-            return _build_tool_cmd(tool, handoff), None
-        return _build_tool_cmd(tool, prompt), None
-    cmd = _build_tool_cmd(tool, "")
-    return [part for part in cmd if part != ""], prompt
-
-
-@contextlib.contextmanager
-def _main_session_cbreak():
-    if not sys.stdin.isatty():
-        yield
-        return
-    original_tty = None
-    try:
-        import termios as termios_module
-        import tty as tty_module
-
-        original_tty = termios_module.tcgetattr(sys.stdin.fileno())
-        tty_module.setcbreak(sys.stdin.fileno())
-    except Exception:
-        yield
-        return
-    try:
-        yield
-    finally:
-        if original_tty is not None:
-            termios_module.tcsetattr(
-                sys.stdin.fileno(), termios_module.TCSADRAIN, original_tty
-            )
-
-
-def _read_main_session_key() -> str | None:
-    if not sys.stdin.isatty():
-        return None
-    try:
-        readable, _, _ = select.select([sys.stdin], [], [], 0.2)
-        if not readable:
-            return None
-        return sys.stdin.read(1)
-    except OSError:
-        return None
-
-
-def _run_tool_with_optional_viewer(
-    *,
-    tool: str,
-    prompt: str,
-    log_path: Path,
-    logger: logging.Logger,
-    viewer: TaskViewer | None,
-    round_index: int,
-    viewer_controller: ViewerController | None = None,
-    prompt_path: Path | None = None,
-) -> int | None:
-    cmd, prompt_stdin = _build_tool_cmd_for_prompt(tool, prompt, prompt_path)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    if viewer is None or tool not in _LIVE_VIEWER_TOOLS:
-        try:
-            with log_path.open("w", encoding="utf-8") as log_file:
-                result = subprocess.run(
-                    cmd,
-                    input=prompt_stdin,
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    check=False,
-                )
-        except OSError:
-            return None
-        return int(result.returncode)
-
-    return_code: int | None = None
-
-    def _worker() -> None:
-        nonlocal return_code
-        started_at = time.monotonic()
-        viewer_log_path = log_path.with_name(f"{log_path.stem}-viewer.log")
-        viewer.start_round(round_index, log_path, viewer_log_path)
-        try:
-            try:
-                with log_path.open("w", encoding="utf-8") as log_file:
-                    proc = subprocess.Popen(
-                        cmd,
-                        stdin=subprocess.PIPE
-                        if prompt_stdin is not None
-                        else subprocess.DEVNULL,
-                        stdout=log_file,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                    )
-                    proc.communicate(input=prompt_stdin)
-                    return_code = int(proc.returncode)
-            except OSError:
-                return_code = None
-        finally:
-            viewer.end_round(time.monotonic() - started_at)
-
-    worker = threading.Thread(target=_worker, daemon=True)
-    worker.start()
-    if not sys.stdin.isatty():
-        worker.join()
-    else:
-        assert viewer_controller is not None
-        logger.info("Agent running. Press Ctrl+L to open the log viewer.")
-        while worker.is_alive():
-            if viewer_controller.is_open():
-                time.sleep(0.2)
-                continue
-            with _main_session_cbreak():
-                key = _read_main_session_key()
-            if key == "\x0c":
-                viewer_controller.open()
-    worker.join()
-    viewer._drain_current_log()
-    return return_code
-
-
-def _find_new_parent_task(preexisting_ids: frozenset[int]) -> Task | None:
-    tasks = all_tasks()
-    new_tasks = [t for tid, t in tasks.items() if tid not in preexisting_ids]
-    if not new_tasks:
-        return None
-    no_parent = [t for t in new_tasks if t.parent_id is None]
-    if no_parent:
-        return min(no_parent, key=lambda t: t.id)
-    return min(new_tasks, key=lambda t: t.id)
-
-
-def _extract_text_from_create_log(log_path: Path, tool: str) -> str:
-    try:
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    if tool not in {"claude", "ccr"}:
-        return text
-
-    collected: list[str] = []
-    for line in text.splitlines():
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(obj, dict):
-            continue
-        if obj.get("type") == "result" and isinstance(obj.get("result"), str):
-            collected.append(obj["result"])
-            continue
-        if obj.get("type") != "assistant":
-            continue
-        message = obj.get("message")
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if (
-                isinstance(block, dict)
-                and block.get("type") == "text"
-                and isinstance(block.get("text"), str)
-            ):
-                collected.append(block["text"])
-    return "\n".join(collected)
-
-
-def _parse_task_reference(text: str) -> tuple[int, Path | None] | None:
-    candidates = re.findall(r"```json\s*(.*?)```", text, flags=re.DOTALL)
-    candidates.extend(re.findall(r"\{[^{}]*\"task_id\"[^{}]*\}", text, flags=re.DOTALL))
-    for candidate in candidates:
-        try:
-            obj = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(obj, dict):
-            continue
-        task_id = obj.get("task_id")
-        if not isinstance(task_id, int):
-            continue
-        task_path = obj.get("task_path")
-        if isinstance(task_path, str) and task_path:
-            return task_id, Path(task_path)
-        return task_id, None
-    return None
-
-
-def _find_created_task(
-    preexisting_ids: frozenset[int], log_path: Path, tool: str
-) -> Task | None:
-    text = _extract_text_from_create_log(log_path, tool)
-    reference = _parse_task_reference(text)
-    if reference is not None:
-        task_id, task_path = reference
-        task = find_task(task_id)
-        if task is not None and task.id not in preexisting_ids:
-            if task_path is None or task.path.resolve() == task_path.resolve():
-                return task
-    return _find_new_parent_task(preexisting_ids)
-
-
-def _resolve_task_descendants(task: Task) -> list[Task]:
-    descendants: list[Task] = []
-
-    def visit(parent_id: int) -> None:
-        for child in sorted(find_children(parent_id), key=lambda item: item.id):
-            descendants.append(child)
-            visit(child.id)
-
-    visit(task.id)
-    return descendants
-
-
-def _approve_task_descendants(task: Task) -> tuple[int, int, bool]:
-    descendants = _resolve_task_descendants(task)
-    approved_count = 0
-    approval_failed = False
-    for child in descendants:
-        if child.status == "draft":
-            child.transition_to("approved")
-            save_task(child)
-            approved_count += 1
-        elif child.status not in {"approved", "failed", "completed"}:
-            typer.echo(
-                f"Warning: subtask {child.id} is '{child.status}', skipped approval",
-                err=True,
-            )
-            approval_failed = True
-    return approved_count, len(descendants), approval_failed
-
-
-def _resolve_to_leaves(task_ids: list[int]) -> list[int]:
-    tasks = all_tasks()
-    leaves: list[int] = []
-    seen: set[int] = set()
-
-    def visit(task_id: int) -> None:
-        children = sorted(find_children(task_id), key=lambda item: item.id)
-        if not children:
-            if task_id not in seen:
-                leaves.append(task_id)
-                seen.add(task_id)
-            return
-        for child in children:
-            visit(child.id)
-
-    for task_id in task_ids:
-        if task_id in tasks:
-            visit(task_id)
-    return leaves
-
-
-def _resolve_execution_candidates(task: Task) -> list[int]:
-    tasks = all_tasks()
-    leaf_ids = _resolve_to_leaves([task.id])
-    return sorted(
-        task_id
-        for task_id in leaf_ids
-        if task_id in tasks and tasks[task_id].status in {"approved", "failed"}
-    )
-
-
-def _run_runnable_task_tree(
-    task: Task,
-    logger: logging.Logger,
-    tool: str,
-    rounds: int,
-    glm_plan: bool,
-    *,
-    open_viewer: bool = False,
-) -> int:
-    tasks = all_tasks()
-    candidates = _resolve_execution_candidates(task)
-    if not candidates:
-        logger.info("No runnable tasks to run after gestate.")
-        typer.echo("No runnable tasks to run after gestate.")
-        return 0
-    plan = build_execution_plan(tasks, candidates)
-    typer.echo(f"Running task(s) after gestate: {','.join(str(i) for i in plan)}")
-    return run_tasks(
-        logger=logger,
-        ids=plan,
-        force=False,
-        tool=tool,
-        rounds=rounds,
-        glm_plan=glm_plan,
-        attempt_mode=False,
-        open_viewer=open_viewer,
-    )
-
-
-def _validate_task(task: Task) -> list[str]:
-    issues: list[str] = []
-    if task.status != "draft":
-        issues.append(f"task {task.id} status is '{task.status}', expected 'draft'")
-    all_t = all_tasks()
-    has_children = any(t.parent_id == task.id for t in all_t.values())
-
-    if has_children:
-        if not (task.path / "spec.md").exists():
-            issues.append(f"task {task.id} missing spec.md")
-        for child in all_t.values():
-            if child.parent_id == task.id and not (child.path / "plan.md").exists():
-                issues.append(f"subtask {child.id} missing plan.md")
-    elif task.parent_id is not None:
-        if task.parent_id in all_t:
-            if not (task.path / "plan.md").exists():
-                issues.append(f"task {task.id} missing plan.md")
-        else:
-            if not (task.path / "spec.md").exists():
-                issues.append(f"task {task.id} missing spec.md")
-            if not (task.path / "plan.md").exists():
-                issues.append(f"task {task.id} missing plan.md")
-    else:
-        if not (task.path / "spec.md").exists():
-            issues.append(f"task {task.id} missing spec.md")
-        if not (task.path / "plan.md").exists():
-            issues.append(f"task {task.id} missing plan.md")
-    return issues
-
-
-def _build_review_prompt(task: Task, round_num: int, max_rounds: int) -> str:
-    from fa.core.config import package_template_dir
-
-    env = Environment(
-        loader=FileSystemLoader(str(package_template_dir())),
-        undefined=StrictUndefined,
-        autoescape=False,
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
-    template = env.get_template("gestate_review.j2")
-    spec_files = sorted(task.path.rglob("spec.md"))
-    plan_files = sorted(task.path.rglob("plan.md"))
-    return template.render(
-        task=task.to_dict(),
-        task_dir=relative_path(task.path),
-        spec_files=[relative_path(p) for p in spec_files],
-        plan_files=[relative_path(p) for p in plan_files],
-        round=round_num,
-        max_rounds=max_rounds,
-    )
+from fa.gestate.artifacts import _format_artifact_diff
 
 
 def gestate(

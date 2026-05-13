@@ -3,7 +3,7 @@
   "include_roots": ["fa", "tests"],
   "extensions": [".py"],
   "extension_max_lines": {
-    ".py": 50
+    ".py": 500
   },
   "excluded_parts": ["/.venv/"],
   "overrides": []

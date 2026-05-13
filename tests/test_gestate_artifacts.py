@@ -1,0 +1,97 @@
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from fa.gestate import commands as gestate_commands
+
+
+class GestateArtifactDiffTests(unittest.TestCase):
+    def test_format_artifact_diff_reports_modified_created_and_deleted_files(
+        self,
+    ) -> None:
+        before = {"spec.md": "old\n", "child/plan.md": "remove\n"}
+        after = {"spec.md": "new\n", "child/new/plan.md": "add\n"}
+
+        diff = gestate_commands._format_artifact_diff(before, after)
+
+        self.assertIn("--- before/spec.md", diff)
+        self.assertIn("+++ after/spec.md", diff)
+        self.assertIn("-old", diff)
+        self.assertIn("+new", diff)
+        self.assertIn("--- before/child/plan.md", diff)
+        self.assertIn("+++ after/child/plan.md", diff)
+        self.assertIn("--- before/child/new/plan.md", diff)
+        self.assertIn("+++ after/child/new/plan.md", diff)
+
+    def test_capture_artifact_snapshot_only_reads_specs_and_plans(self) -> None:
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "spec.md").write_text("spec", encoding="utf-8")
+            (root / "plan.md").write_text("plan", encoding="utf-8")
+            (root / "notes.txt").write_text("notes", encoding="utf-8")
+            child = root / "child"
+            child.mkdir()
+            (child / "plan.md").write_text("child plan", encoding="utf-8")
+
+            snapshot = gestate_commands._capture_artifact_snapshot(root)
+
+        self.assertEqual(set(snapshot), {"spec.md", "plan.md", "child/plan.md"})
+
+    def test_print_round_artifact_diff_reports_no_changes(self) -> None:
+        with patch("fa.gestate.commands.typer.echo") as echo:
+            gestate_commands._print_round_artifact_diff(
+                2, {"spec.md": "same"}, {"spec.md": "same"}
+            )
+
+        echo.assert_called_with("Round 2: no artifact changes")
+
+    def test_gestate_failed_tool_run_with_no_changes_prints_no_change_and_converges(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as tempdir:
+            with patch("fa.task.storage.find_project_root", return_value=Path(tempdir)):
+                from fa.task.storage import create_task
+
+                task = create_task("demo")
+                (task.path / "spec.md").write_text("spec", encoding="utf-8")
+                (task.path / "plan.md").write_text("plan", encoding="utf-8")
+
+                with (
+                    patch(
+                        "fa.gestate.commands._run_tool_with_optional_viewer",
+                        return_value=None,
+                    ),
+                    patch("fa.gestate.commands.typer.echo") as echo,
+                ):
+                    gestate_commands.gestate(
+                        str(task.id), tool="codex", max_rounds=1, run=False
+                    )
+
+        echo.assert_any_call("Round 1: no artifact changes")
+        echo.assert_any_call("Converged after 1 round(s)")
+
+    def test_gestate_nonzero_tool_run_with_no_changes_prints_no_change_and_converges(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as tempdir:
+            with patch("fa.task.storage.find_project_root", return_value=Path(tempdir)):
+                from fa.task.storage import create_task
+
+                task = create_task("demo")
+                (task.path / "spec.md").write_text("spec", encoding="utf-8")
+                (task.path / "plan.md").write_text("plan", encoding="utf-8")
+
+                with (
+                    patch(
+                        "fa.gestate.commands._run_tool_with_optional_viewer",
+                        return_value=1,
+                    ),
+                    patch("fa.gestate.commands.typer.echo") as echo,
+                ):
+                    gestate_commands.gestate(
+                        str(task.id), tool="codex", max_rounds=1, run=False
+                    )
+
+        echo.assert_any_call("Round 1: no artifact changes")
+        echo.assert_any_call("Converged after 1 round(s)")
