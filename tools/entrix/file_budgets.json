@@ -1,0 +1,10 @@
+{
+  "default_max_lines": 500,
+  "include_roots": ["fa", "tests"],
+  "extensions": [".py"],
+  "extension_max_lines": {
+    ".py": 50
+  },
+  "excluded_parts": ["/.venv/"],
+  "overrides": []
+}

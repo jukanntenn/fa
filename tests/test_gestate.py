@@ -261,7 +261,9 @@ Created the task:
                         "fa.gestate.commands._run_tool_with_optional_viewer",
                         side_effect=fake_run,
                     ) as run_tool,
-                    patch("fa.gestate.commands._run_runnable_task_tree", return_value=0),
+                    patch(
+                        "fa.gestate.commands._run_runnable_task_tree", return_value=0
+                    ),
                 ):
                     gestate_commands.gestate(
                         "line 1\nline 2", tool="codex", max_rounds=1, run=False

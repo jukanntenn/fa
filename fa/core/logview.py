@@ -487,7 +487,9 @@ class TaskViewer:
         for raw_line in new_lines:
             formatted = self._parse_log_line(raw_line)
             if formatted is not None:
-                self._append_entry(Entry(round_index=self._current_round, text=formatted))
+                self._append_entry(
+                    Entry(round_index=self._current_round, text=formatted)
+                )
 
     def _read_log_lines(self, path: Path, offset: int) -> list[str]:
         if not path.exists():

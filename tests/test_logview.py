@@ -257,9 +257,7 @@ class TaskViewerStateTests(unittest.TestCase):
                     {
                         "type": "assistant",
                         "message": {
-                            "content": [
-                                {"type": "text", "text": "hello from agent"}
-                            ]
+                            "content": [{"type": "text", "text": "hello from agent"}]
                         },
                     }
                 )

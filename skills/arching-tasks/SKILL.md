@@ -31,7 +31,7 @@ Do NOT create tasks, write task.md, or take any implementation action until:
 digraph arching_tasks {
     rankdir=TB;
     node [shape=box];
-    
+
     "Explore project context" [shape=box];
     "Ask clarifying questions\n(one at a time)" [shape=box];
     "Propose 2-3 approaches\nwith trade-offs" [shape=box];
@@ -39,7 +39,7 @@ digraph arching_tasks {
     "Design approved?" [shape=diamond];
     "Propose complexity\n(simple vs complex)" [shape=box];
     "Complexity confirmed?" [shape=diamond];
-    
+
     "Create single task" [shape=box];
     "Write task.md\n(spec + plan)" [shape=box];
     "Dispatch reviewer" [shape=box];
@@ -47,7 +47,7 @@ digraph arching_tasks {
     "Review iterations < 3?" [shape=diamond];
     "Surface to human" [shape=box, style=filled, fillcolor=lightyellow];
     "Task complete" [shape=doublecircle];
-    
+
     "Create parent task" [shape=box];
     "Write parent task.md\n(overview + decomposition)" [shape=box];
     "Dispatch reviewer" [shape=box];
@@ -59,7 +59,7 @@ digraph arching_tasks {
     "Dispatch reviewer" [shape=box];
     "Review passed?" [shape=diamond];
     "More subtasks?" [shape=diamond];
-    
+
     "Explore project context" -> "Ask clarifying questions\n(one at a time)";
     "Ask clarifying questions\n(one at a time)" -> "Propose 2-3 approaches\nwith trade-offs";
     "Propose 2-3 approaches\nwith trade-offs" -> "Present design";
@@ -70,7 +70,7 @@ digraph arching_tasks {
     "Complexity confirmed?" -> "Propose complexity\n(simple vs complex)" [label="no, discuss"];
     "Complexity confirmed?" -> "Create single task" [label="simple"];
     "Complexity confirmed?" -> "Create parent task" [label="complex"];
-    
+
     // Simple path
     "Create single task" -> "Write task.md\n(spec + plan)";
     "Write task.md\n(spec + plan)" -> "Dispatch reviewer";
@@ -79,7 +79,7 @@ digraph arching_tasks {
     "Review iterations < 3?" -> "Write task.md\n(spec + plan)" [label="yes, fix issues"];
     "Review iterations < 3?" -> "Surface to human" [label="no"];
     "Review passed?" -> "Task complete" [label="yes"];
-    
+
     // Complex path - parent
     "Create parent task" -> "Write parent task.md\n(overview + decomposition)";
     "Write parent task.md\n(overview + decomposition)" -> "Dispatch reviewer";
@@ -90,7 +90,7 @@ digraph arching_tasks {
     "Propose subtask split" -> "Split approved?";
     "Split approved?" -> "Propose subtask split" [label="no, revise"];
     "Split approved?" -> "Create subtask" [label="yes"];
-    
+
     // Complex path - subtasks
     "Create subtask" -> "Write subtask task.md\n(spec + plan)";
     "Write subtask task.md\n(spec + plan)" -> "Dispatch reviewer";

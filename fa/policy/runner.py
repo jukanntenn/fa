@@ -200,7 +200,9 @@ def run_policy(
             len(files),
         )
         t0 = time.monotonic()
-        code = _run_tool(tool, prompt, log_file, logger, agent=policy.agent, extra_env=extra_env)
+        code = _run_tool(
+            tool, prompt, log_file, logger, agent=policy.agent, extra_env=extra_env
+        )
         elapsed = int(time.monotonic() - t0)
         logger.info(
             'Policy "%s" round %d/%d completed in %ds | exit_code=%d',

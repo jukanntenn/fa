@@ -327,9 +327,7 @@ def _extract_text_from_create_log(log_path: Path, tool: str) -> str:
 
 def _parse_task_reference(text: str) -> tuple[int, Path | None] | None:
     candidates = re.findall(r"```json\s*(.*?)```", text, flags=re.DOTALL)
-    candidates.extend(
-        re.findall(r"\{[^{}]*\"task_id\"[^{}]*\}", text, flags=re.DOTALL)
-    )
+    candidates.extend(re.findall(r"\{[^{}]*\"task_id\"[^{}]*\}", text, flags=re.DOTALL))
     for candidate in candidates:
         try:
             obj = json.loads(candidate)
