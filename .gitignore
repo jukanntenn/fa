@@ -63,5 +63,3 @@ cython_debug/
 # fa runtime state
 .fa/
 
-# Codex
-.codex
