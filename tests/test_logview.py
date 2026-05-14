@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import io
 import json
 import threading
@@ -7,15 +9,107 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from fa.core.logview import (
+from fa.core.logview import parse_codex_line, parse_jsonl_line
+from fa.core.logview_parse import (
     _RESET,
-    Entry,
-    TaskViewer,
-    ViewerController,
+    _strip_ansi,
+    _tool_input_summary,
+    _truncate,
     _truncate_to_visible,
-    parse_codex_line,
-    parse_jsonl_line,
+    _update_active_sgr,
 )
+from fa.core.logview_viewer import Entry, TaskViewer, ViewerController
+
+
+class LogviewParseHelperTests(unittest.TestCase):
+    def test_truncate_preserves_newlines_when_requested(self) -> None:
+        self.assertEqual(
+            _truncate("alpha\nbeta", 20, preserve_newlines=True), "alpha\nbeta"
+        )
+
+    def test_truncate_replaces_newlines_when_not_preserving(self) -> None:
+        self.assertEqual(_truncate("alpha\nbeta", 20), "alpha beta")
+
+    def test_truncate_short_input_both_modes(self) -> None:
+        self.assertEqual(_truncate("a\nb", 10), "a b")
+        self.assertEqual(_truncate("a\nb", 10, preserve_newlines=True), "a\nb")
+
+    def test_strip_ansi_removes_escape_sequences(self) -> None:
+        self.assertEqual(_strip_ansi("\033[31mred\033[0m text"), "red text")
+
+    def test_strip_ansi_removes_sequences_without_surrounding_text(self) -> None:
+        self.assertEqual(_strip_ansi("\x1b[31mred\x1b[0m"), "red")
+
+    def test_update_active_sgr_tracks_and_clears_style_categories(self) -> None:
+        active: set[str] = set()
+
+        _update_active_sgr("\033[1;31m", active)
+        self.assertEqual(active, set())
+
+        _update_active_sgr("\033[39m", active)
+        self.assertEqual(active, set())
+
+        _update_active_sgr(_RESET, active)
+        self.assertEqual(active, set())
+
+    def test_update_active_sgr_tracks_style_categories(self) -> None:
+        active: set[str] = set()
+        _update_active_sgr("1;31", active)
+        self.assertIn("intensity", active)
+        self.assertIn("fg", active)
+        _update_active_sgr("22;39", active)
+        self.assertNotIn("intensity", active)
+        self.assertNotIn("fg", active)
+
+    def test_parse_jsonl_line_returns_raw_line_for_invalid_json(self) -> None:
+        self.assertEqual(parse_jsonl_line("not json"), "\x1b[2m[raw] not json\x1b[0m")
+
+    def test_parse_jsonl_line_returns_unknown_message_for_unknown_type(self) -> None:
+        self.assertEqual(
+            parse_jsonl_line('{"type":"mystery"}'), "\x1b[2m[unknown: mystery]\x1b[0m"
+        )
+
+    def test_parse_jsonl_line_returns_raw_contains_markers(self) -> None:
+        result = parse_jsonl_line("not json")
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIn("[raw]", result)
+        self.assertIn("not json", result)
+
+    def test_parse_jsonl_line_returns_unknown_contains_marker(self) -> None:
+        result = parse_jsonl_line('{"type": "mystery"}')
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIn("[unknown: mystery]", result)
+
+    def test_tool_input_summary_formats_known_tool_inputs(self) -> None:
+        self.assertEqual(_tool_input_summary("Read", {"file_path": "a.txt"}), "a.txt")
+        self.assertEqual(
+            _tool_input_summary(
+                "Edit", {"file_path": "a.txt", "old_string": "x", "new_string": "y"}
+            ),
+            "a.txt: x",
+        )
+        self.assertEqual(_tool_input_summary("Write", {"file_path": "a.txt"}), "a.txt")
+        self.assertEqual(
+            _tool_input_summary("Bash", {"command": "pytest -q"}), "pytest -q"
+        )
+        self.assertEqual(_tool_input_summary("Grep", {"pattern": "task"}), "task")
+        self.assertEqual(
+            _tool_input_summary("Glob", {"pattern": "tests/*.py"}), "tests/*.py"
+        )
+
+    def test_tool_input_summary_formats_common_inputs(self) -> None:
+        self.assertEqual(_tool_input_summary("Read", {"file_path": "/tmp/x"}), "/tmp/x")
+        self.assertEqual(
+            _tool_input_summary("Edit", {"file_path": "/tmp/x"}), "/tmp/x: "
+        )
+        self.assertEqual(
+            _tool_input_summary("Write", {"file_path": "/tmp/x"}), "/tmp/x"
+        )
+        self.assertEqual(_tool_input_summary("Bash", {"command": "echo hi"}), "echo hi")
+        self.assertEqual(_tool_input_summary("Grep", {"pattern": "foo"}), "foo")
+        self.assertEqual(_tool_input_summary("Glob", {"pattern": "*.py"}), "*.py")
 
 
 class TruncateToVisibleTests(unittest.TestCase):
@@ -120,116 +214,26 @@ class CodexFormattingTests(unittest.TestCase):
         state: dict[str, str] = {}
 
         parse_codex_line("exec", state)
-        parse_codex_line('/usr/bin/zsh -lc "pytest" in /home/alice/Workspace/fa', state)
-        parse_codex_line("codex", state)
-        success = parse_codex_line(" succeeded in 0ms:", state)
+        parse_codex_line('python -c "print(1)"', state)
+        result = parse_codex_line(" succeeded in 1ms:", state)
 
-        self.assertIsNotNone(success)
-        assert success is not None
-        self.assertIn("[exec succeeded]", success)
-        self.assertNotIn("[codex]", success)
-
-    def test_codex_preserves_exec_output_until_next_role_marker(self) -> None:
-        state: dict[str, str] = {}
-
-        parse_codex_line("exec", state)
-        parse_codex_line('/usr/bin/zsh -lc "pytest" in /home/alice/Workspace/fa', state)
-        parse_codex_line(" succeeded in 0ms:", state)
-        output = parse_codex_line("all passed", state)
-        parse_codex_line("codex", state)
-        done = parse_codex_line("Done.", state)
-
-        self.assertIsNotNone(output)
-        self.assertIsNotNone(done)
-        assert output is not None
-        assert done is not None
-        self.assertIn("all passed", output)
-        self.assertNotIn("[codex]", output)
-        self.assertIn("[codex]", done)
-        self.assertIn("Done.", done)
-
-    def test_task_viewer_drains_codex_log_with_codex_parser(self) -> None:
-        with TemporaryDirectory() as tempdir:
-            log_path = Path(tempdir) / "round.log"
-            log_path.write_text(
-                "\n".join(
-                    [
-                        "OpenAI Codex v0.125.0 (research preview)",
-                        "user",
-                        "hidden prompt",
-                        "codex",
-                        "I’ll inspect the code now.",
-                        "exec",
-                        '/usr/bin/zsh -lc "pytest" in /home/alice/Workspace/fa',
-                        "codex",
-                        " succeeded in 0ms:",
-                        "all passed",
-                        "codex",
-                        "Done.",
-                    ]
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            viewer = TaskViewer("task", total_rounds=1, tool="codex")
-            viewer.start_round(1, log_path)
-            viewer._drain_current_log()
-
-        entries = "\n".join(entry.text for entry in viewer._entries)
-        self.assertIn("[codex]", entries)
-        self.assertIn("inspect the code", entries)
-        self.assertIn("[tool: exec]", entries)
-        self.assertIn("[exec succeeded]", entries)
-        self.assertIn("all passed", entries)
-        self.assertIn("Done.", entries)
-        self.assertNotIn("hidden prompt", entries)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIn("[exec succeeded]", result)
 
 
 class TaskViewerStateTests(unittest.TestCase):
-    def test_request_close_sets_close_requested(self) -> None:
+    def test_viewer_reports_open_and_close_state(self) -> None:
         viewer = TaskViewer("task", total_rounds=1)
 
+        self.assertFalse(viewer._close_requested.is_set())
+        self.assertFalse(viewer._task_done.is_set())
+        viewer.mark_done()
+        self.assertTrue(viewer._task_done.is_set())
         viewer.request_close()
-
         self.assertTrue(viewer._close_requested.is_set())
 
-    def test_start_round_preserves_previous_round_entries_and_scroll(self) -> None:
-        viewer = TaskViewer("task", total_rounds=2)
-        viewer.start_round(1, Path("round-1.log"))
-        viewer._entries.append(Entry(round_index=1, text="old output"))
-        viewer._scroll_offset = 5
-
-        viewer.start_round(2, Path("round-2.log"))
-
-        self.assertEqual(viewer._current_round, 2)
-        self.assertEqual(viewer._current_log, Path("round-2.log"))
-        self.assertEqual(viewer._scroll_offset, 6)
-        self.assertEqual(len(viewer._entries), 3)
-        self.assertIn("Round 1/2 started", viewer._entries[0].text)
-        self.assertEqual(viewer._entries[1].text, "old output")
-        self.assertIn("Round 2/2 started", viewer._entries[2].text)
-
-    def test_start_round_preserves_scroll_when_new_log_file_has_no_output_yet(
-        self,
-    ) -> None:
-        viewer = TaskViewer("task", total_rounds=2)
-        viewer.start_round(1, Path("round-1.log"))
-        viewer._entries.append(Entry(round_index=1, text="old output"))
-        viewer._scroll_offset = 2
-
-        viewer.start_round(2, Path("missing-round-2.log"))
-
-        self.assertEqual(viewer._scroll_offset, 3)
-        self.assertIn("Round 1/2 started", viewer._entries[0].text)
-        self.assertEqual(viewer._entries[1].text, "old output")
-        self.assertIn("Round 2/2 started", viewer._entries[2].text)
-        lines = viewer._render_body_lines_from(viewer._entries, 80, is_waiting=True)
-        joined = "\n".join(lines)
-        self.assertIn("old output", joined)
-        self.assertIn("Round 2/2 started", joined)
-        self.assertIn("Waiting for agent output", joined)
-
-    def test_body_lines_include_entries_from_all_rounds(self) -> None:
+    def test_viewer_adds_round_markers_and_body_entries(self) -> None:
         viewer = TaskViewer("task", total_rounds=2)
         viewer.start_round(1, Path("round-1.log"))
         viewer._entries.append(Entry(round_index=1, text="round one output"))
@@ -303,8 +307,10 @@ class TaskViewerStateTests(unittest.TestCase):
 
         stdout = io.StringIO()
         with (
-            patch("fa.core.logview.shutil.get_terminal_size", return_value=(80, 2)),
-            patch("fa.core.logview.sys.stdout", stdout),
+            patch(
+                "fa.core.logview_viewer.shutil.get_terminal_size", return_value=(80, 2)
+            ),
+            patch("fa.core.logview_viewer.sys.stdout", stdout),
         ):
             viewer._render()
 

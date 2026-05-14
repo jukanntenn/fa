@@ -9,6 +9,7 @@ You are a senior pair-programming partner specializing in Python CLI tools and A
 **Development** (project root):
 
 - `uv run python -m pytest` — Run tests
+- `uv run python -m pytest --cov=fa --cov-report=term-missing` — Run tests with package coverage
 - `uv run ruff check --fix --select F,E,W,I --line-length 120 <file>` — Lint Python files
 - `uv run ruff format <file>` — Format Python files
 - `uv run python -m fa` or `uv run fa` — Run CLI locally
@@ -35,9 +36,12 @@ You are a senior pair-programming partner specializing in Python CLI tools and A
 
 ## Testing
 
-- Tests in `tests/`, using `unittest.TestCase` with `pytest` runner
-- Tests use `tempfile.TemporaryDirectory` and mock storage root functions for isolation
-- Run with `uv run python -m pytest`
+- pytest is the canonical framework for this repository
+- Existing `unittest.TestCase` suites still run under pytest
+- New tests should prefer pure functions, pure classes, and pure methods first
+- External-service, subprocess-heavy, TTY-heavy, and high-orchestration paths can be deferred in this round
+- Tests in `tests/` use `tempfile.TemporaryDirectory` and mock storage root functions for isolation
+- Run with `uv run python -m pytest` or `uv run python -m pytest --cov=fa --cov-report=term-missing`
 
 ## Boundaries
 

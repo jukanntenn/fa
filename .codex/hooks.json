@@ -18,6 +18,18 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run \"$(git rev-parse --show-toplevel)/.codex/hooks/file_budget.py\"",
+            "timeout": 30,
+            "statusMessage": "Checking file budgets"
+          }
+        ]
+      }
     ]
   }
 }

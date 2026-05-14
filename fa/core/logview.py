@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from fa.core.logview_parse import (
     _LIVE_VIEWER_TOOLS,
+    _RESET,
     _STREAM_JSON_TOOLS,
+    _truncate_to_visible,
     parse_codex_line,
     parse_jsonl_line,
 )
@@ -13,7 +15,9 @@ __all__ = [
     "TaskViewer",
     "ViewerController",
     "_LIVE_VIEWER_TOOLS",
+    "_RESET",
     "_STREAM_JSON_TOOLS",
+    "_truncate_to_visible",
     "parse_codex_line",
     "parse_jsonl_line",
 ]

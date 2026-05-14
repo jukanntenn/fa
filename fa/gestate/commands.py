@@ -21,10 +21,10 @@ from fa.gestate.tasks import (
     _resolve_execution_candidates,
     _resolve_task_descendants,
     _resolve_to_leaves,
-    _run_runnable_task_tree,
     _validate_task,
 )
 from fa.task.model import Task
+from fa.task.runner import run_tasks
 from fa.task.storage import all_tasks, fa_dir, find_task, relative_path, save_task
 
 __all__ = [
@@ -50,6 +50,36 @@ __all__ = [
 ]
 
 from fa.gestate.artifacts import _format_artifact_diff
+
+
+def _run_runnable_task_tree(
+    task: Task,
+    logger: logging.Logger,
+    tool: str,
+    rounds: int,
+    glm_plan: bool,
+    *,
+    open_viewer: bool = False,
+) -> int:
+    candidates = _resolve_execution_candidates(task)
+    if not candidates:
+        logger.info("No runnable tasks to run after gestate.")
+        typer.echo("No runnable tasks to run after gestate.")
+        return 0
+    from fa.task.runner import build_execution_plan
+
+    plan = build_execution_plan(all_tasks(), candidates)
+    typer.echo(f"Running task(s) after gestate: {','.join(str(i) for i in plan)}")
+    return run_tasks(
+        logger=logger,
+        ids=plan,
+        force=False,
+        tool=tool,
+        rounds=rounds,
+        glm_plan=glm_plan,
+        attempt_mode=False,
+        open_viewer=open_viewer,
+    )
 
 
 def gestate(

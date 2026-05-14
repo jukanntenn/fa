@@ -17,6 +17,16 @@
         ]
       }
     ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run $CLAUDE_PROJECT_DIR/.claude/hooks/file_budget.py"
+          }
+        ]
+      }
+    ],
     "SubagentStop": []
   },
   "enabledPlugins": {}

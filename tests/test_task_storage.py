@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import unittest
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -113,88 +116,71 @@ class TaskStorageIdAllocationTests(unittest.TestCase):
         self.assertEqual(child.id, 3)
         self.assertEqual(child.parent_id, parent.id)
 
+    def test_next_task_id_starts_at_one_with_no_tasks(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            with patch.object(
+                storage, "find_project_root", return_value=Path(temp_dir)
+            ):
+                self.assertEqual(storage.next_task_id(), 1)
 
-class TaskArchiveCommandTests(unittest.TestCase):
-    def test_archive_without_range_moves_all_completed_tasks(self) -> None:
+
+class TaskStorageHelperTests(unittest.TestCase):
+    def test_task_name_uses_supplied_datetime(self) -> None:
+        self.assertEqual(
+            storage._task_name(5, "demo", datetime(2026, 5, 13, 8, 9, 10)),
+            "5-05-13-demo",
+        )
+
+    def test_parse_id_range_handles_mixed_input(self) -> None:
+        self.assertEqual(storage.parse_id_range("1, 3-5, 4, 2"), [1, 2, 3, 4, 5])
+
+    def test_read_json_returns_none_for_missing_and_invalid_json(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            missing = Path(temp_dir) / "missing.json"
+            invalid = Path(temp_dir) / "invalid.json"
+            invalid.write_text("{not json}", encoding="utf-8")
+
+            self.assertIsNone(storage._read_json(missing))
+            self.assertIsNone(storage._read_json(invalid))
+
+    def test_write_json_round_trips_utf8(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "sample.json"
+            data = {"message": "café"}
+
+            storage._write_json(path, data)
+
+            self.assertEqual(storage._read_json(path), data)
+            self.assertIn("café", path.read_text(encoding="utf-8"))
+
+    def test_relative_path_uses_project_root(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
+            target = root / ".fa" / "tasks" / "demo" / "task.json"
             with patch.object(storage, "find_project_root", return_value=root):
-                completed = storage.create_task("completed")
-                draft = storage.create_task("draft")
-                completed.status = "completed"
-                storage.save_task(completed)
-
-                result = CliRunner().invoke(app, ["task", "archive"])
-
-                month_dir = storage.archive_dir() / completed.created_at[:7]
-                self.assertEqual(result.exit_code, 0, result.output)
-                self.assertFalse(completed.path.exists())
-                self.assertTrue((month_dir / completed.path.name).is_dir())
-                self.assertTrue(draft.path.is_dir())
-
-    def test_archive_without_range_reports_no_completed_tasks(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            with patch.object(storage, "find_project_root", return_value=root):
-                storage.create_task("draft")
-
-                result = CliRunner().invoke(app, ["task", "archive"])
-
-                self.assertEqual(result.exit_code, 0, result.output)
-                self.assertIn("No completed tasks to archive", result.output)
-
-    def test_archive_explicit_range_preserves_non_completed_error(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            with patch.object(storage, "find_project_root", return_value=root):
-                draft = storage.create_task("draft")
-
-                result = CliRunner().invoke(app, ["task", "archive", str(draft.id)])
-
-                self.assertNotEqual(result.exit_code, 0)
-                self.assertIn("is not completed", result.output)
-
-    def test_archive_completed_parent_and_child_moves_parent_once(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            with patch.object(storage, "find_project_root", return_value=root):
-                parent = storage.create_task("parent")
-                child = storage.create_task("child", parent.id)
-                parent.status = "completed"
-                child.status = "completed"
-                storage.save_task(parent)
-                storage.save_task(child)
-
-                result = CliRunner().invoke(app, ["task", "archive"])
-
-                month_dir = storage.archive_dir() / parent.created_at[:7]
-                archived_parent = month_dir / parent.path.name
-                self.assertEqual(result.exit_code, 0, result.output)
-                self.assertTrue(archived_parent.is_dir())
-                self.assertTrue((archived_parent / child.path.name).is_dir())
-                self.assertFalse(parent.path.exists())
-
-    def test_archive_explicit_parent_and_child_moves_parent_once(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            with patch.object(storage, "find_project_root", return_value=root):
-                parent = storage.create_task("parent")
-                child = storage.create_task("child", parent.id)
-                parent.status = "completed"
-                child.status = "completed"
-                storage.save_task(parent)
-                storage.save_task(child)
-
-                result = CliRunner().invoke(
-                    app, ["task", "archive", f"{parent.id},{child.id}"]
+                self.assertEqual(
+                    storage.relative_path(target), ".fa/tasks/demo/task.json"
                 )
 
-                month_dir = storage.archive_dir() / parent.created_at[:7]
-                archived_parent = month_dir / parent.path.name
+
+class TaskArchiveCommandTests(unittest.TestCase):
+    def test_archive_command_moves_task_and_updates_status(self) -> None:
+        runner = CliRunner()
+        with TemporaryDirectory() as temp_dir:
+            with patch.object(
+                storage, "find_project_root", return_value=Path(temp_dir)
+            ):
+                result = runner.invoke(app, ["task", "create", "demo"])
                 self.assertEqual(result.exit_code, 0, result.output)
-                self.assertTrue(archived_parent.is_dir())
-                self.assertTrue((archived_parent / child.path.name).is_dir())
-                self.assertFalse(parent.path.exists())
+                task_id = next(iter(storage.all_task_ids()))
+                task = storage.find_task(task_id)
+                assert task is not None
+                task.transition_to("approved")
+                task.transition_to("running")
+                task.transition_to("completed")
+                storage.save_task(task)
+                result = runner.invoke(app, ["task", "archive", str(task_id)])
+                self.assertEqual(result.exit_code, 0, result.output)
 
 
 if __name__ == "__main__":

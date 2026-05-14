@@ -11,6 +11,12 @@ dependencies = [
     "prompt_toolkit>=3.0.0",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=9.0.0",
+    "pytest-cov>=6.0.0",
+]
+
 [tool.setuptools.packages.find]
 include = ["fa*"]
 
@@ -19,3 +25,13 @@ fa = ["templates/*.j2"]
 
 [project.scripts]
 fa = "fa.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.coverage.run]
+source = ["fa"]
+
+[tool.coverage.report]
+show_missing = true

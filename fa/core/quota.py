@@ -48,7 +48,7 @@ def check_glm_quota(logger: logging.Logger) -> bool:
             )
             return True
         next_reset = item.get("nextResetTime")
-        if not next_reset:
+        if next_reset is None:
             logger.warning(
                 "GLM quota: %.0f%% (threshold: %d%%) - no reset time, cannot wait",
                 percentage,
