@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import unittest
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -149,78 +148,75 @@ def test_find_children_returns_matching_tasks(storage_root):
     assert children[0].parent_id == parent.id
 
 
-class TaskStorageHelperTests(unittest.TestCase):
-    def test_task_name_uses_supplied_datetime(self) -> None:
-        self.assertEqual(
-            storage._task_name(5, "demo", datetime(2026, 5, 13, 8, 9, 10)),
-            "5-05-13-demo",
-        )
-
-    def test_task_name_with_default_none_date_uses_current_datetime(self) -> None:
-        name = storage._task_name(10, "my-task")
-        self.assertTrue(name.startswith("10-"))
-        self.assertTrue(name.endswith("-my-task"))
-
-    def test_parse_id_range_handles_mixed_input(self) -> None:
-        self.assertEqual(storage.parse_id_range("1, 3-5, 4, 2"), [1, 2, 3, 4, 5])
-
-    def test_parse_id_range_with_single_id(self) -> None:
-        self.assertEqual(storage.parse_id_range("42"), [42])
-
-    def test_parse_id_range_with_whitespace_only_input(self) -> None:
-        self.assertEqual(storage.parse_id_range("  ,  ,  "), [])
-
-    def test_parse_id_range_with_overlapping_ranges(self) -> None:
-        self.assertEqual(storage.parse_id_range("1-3, 2-4"), [1, 2, 3, 4])
-
-    def test_read_json_returns_none_for_missing_and_invalid_json(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            missing = Path(temp_dir) / "missing.json"
-            invalid = Path(temp_dir) / "invalid.json"
-            invalid.write_text("{not json}", encoding="utf-8")
-
-            self.assertIsNone(storage._read_json(missing))
-            self.assertIsNone(storage._read_json(invalid))
-
-    def test_write_json_round_trips_utf8(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            path = Path(temp_dir) / "sample.json"
-            data = {"message": "café"}
-
-            storage._write_json(path, data)
-
-            self.assertEqual(storage._read_json(path), data)
-            self.assertIn("café", path.read_text(encoding="utf-8"))
-
-    def test_relative_path_uses_project_root(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            target = root / ".fa" / "tasks" / "demo" / "task.json"
-            with patch.object(storage, "find_project_root", return_value=root):
-                self.assertEqual(
-                    storage.relative_path(target), ".fa/tasks/demo/task.json"
-                )
+def test_task_name_uses_supplied_datetime() -> None:
+    assert (
+        storage._task_name(5, "demo", datetime(2026, 5, 13, 8, 9, 10)) == "5-05-13-demo"
+    )
 
 
-class TaskArchiveCommandTests(unittest.TestCase):
-    def test_archive_command_moves_task_and_updates_status(self) -> None:
-        runner = CliRunner()
-        with TemporaryDirectory() as temp_dir:
-            with patch.object(
-                storage, "find_project_root", return_value=Path(temp_dir)
-            ):
-                result = runner.invoke(app, ["task", "create", "demo"])
-                self.assertEqual(result.exit_code, 0, result.output)
-                task_id = next(iter(storage.all_task_ids()))
-                task = storage.find_task(task_id)
-                assert task is not None
-                task.transition_to("approved")
-                task.transition_to("running")
-                task.transition_to("completed")
-                storage.save_task(task)
-                result = runner.invoke(app, ["task", "archive", str(task_id)])
-                self.assertEqual(result.exit_code, 0, result.output)
+def test_task_name_with_default_none_date_uses_current_datetime() -> None:
+    name = storage._task_name(10, "my-task")
+    assert name.startswith("10-")
+    assert name.endswith("-my-task")
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_parse_id_range_handles_mixed_input() -> None:
+    assert storage.parse_id_range("1, 3-5, 4, 2") == [1, 2, 3, 4, 5]
+
+
+def test_parse_id_range_with_single_id() -> None:
+    assert storage.parse_id_range("42") == [42]
+
+
+def test_parse_id_range_with_whitespace_only_input() -> None:
+    assert storage.parse_id_range("  ,  ,  ") == []
+
+
+def test_parse_id_range_with_overlapping_ranges() -> None:
+    assert storage.parse_id_range("1-3, 2-4") == [1, 2, 3, 4]
+
+
+def test_read_json_returns_none_for_missing_and_invalid_json() -> None:
+    with TemporaryDirectory() as temp_dir:
+        missing = Path(temp_dir) / "missing.json"
+        invalid = Path(temp_dir) / "invalid.json"
+        invalid.write_text("{not json}", encoding="utf-8")
+
+        assert storage._read_json(missing) is None
+        assert storage._read_json(invalid) is None
+
+
+def test_write_json_round_trips_utf8() -> None:
+    with TemporaryDirectory() as temp_dir:
+        path = Path(temp_dir) / "sample.json"
+        data = {"message": "café"}
+
+        storage._write_json(path, data)
+
+        assert storage._read_json(path) == data
+        assert "café" in path.read_text(encoding="utf-8")
+
+
+def test_relative_path_uses_project_root() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        target = root / ".fa" / "tasks" / "demo" / "task.json"
+        with patch.object(storage, "find_project_root", return_value=root):
+            assert storage.relative_path(target) == ".fa/tasks/demo/task.json"
+
+
+def test_archive_command_moves_task_and_updates_status() -> None:
+    runner = CliRunner()
+    with TemporaryDirectory() as temp_dir:
+        with patch.object(storage, "find_project_root", return_value=Path(temp_dir)):
+            result = runner.invoke(app, ["task", "create", "demo"])
+            assert result.exit_code == 0, result.output
+            task_id = next(iter(storage.all_task_ids()))
+            task = storage.find_task(task_id)
+            assert task is not None
+            task.transition_to("approved")
+            task.transition_to("running")
+            task.transition_to("completed")
+            storage.save_task(task)
+            result = runner.invoke(app, ["task", "archive", str(task_id)])
+            assert result.exit_code == 0, result.output
