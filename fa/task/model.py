@@ -7,6 +7,8 @@ from typing import Any
 
 from fa.core.config import STATUS_ALIASES, VALID_STATUSES, VALID_TRANSITIONS
 
+_TIMESTAMP_FMT = "%Y-%m-%dT%H:%M:%S"
+
 
 class InvalidTransition(Exception):
     def __init__(self, current: str, target: str) -> None:
@@ -62,6 +64,10 @@ class Task:
             raise InvalidTransition(self.status, target)
         self.status = target
 
+    def complete(self) -> None:
+        self.transition_to("completed")
+        self.completed_at = datetime.now().strftime(_TIMESTAMP_FMT)
+
     @staticmethod
     def new(task_id: int, slug: str, parent_id: int | None, path: Path) -> "Task":
         return Task(
@@ -71,7 +77,7 @@ class Task:
             status="draft",
             depends_on=[],
             related_to=[],
-            created_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            created_at=datetime.now().strftime(_TIMESTAMP_FMT),
             completed_at=None,
             path=path,
         )

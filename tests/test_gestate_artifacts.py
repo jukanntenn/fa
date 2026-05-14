@@ -95,3 +95,72 @@ class GestateArtifactDiffTests(unittest.TestCase):
 
         echo.assert_any_call("Round 1: no artifact changes")
         echo.assert_any_call("Converged after 1 round(s)")
+
+
+class GestateArtifactFilesTests(unittest.TestCase):
+    def test_artifact_files_returns_only_spec_and_plan_sorted_by_posix(self) -> None:
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "spec.md").write_text("spec", encoding="utf-8")
+            (root / "plan.md").write_text("plan", encoding="utf-8")
+            (root / "notes.txt").write_text("ignore", encoding="utf-8")
+            child = root / "alpha"
+            child.mkdir()
+            (child / "spec.md").write_text("child spec", encoding="utf-8")
+            child2 = root / "zeta"
+            child2.mkdir()
+            (child2 / "plan.md").write_text("child plan", encoding="utf-8")
+
+            from fa.gestate.artifacts import _artifact_files
+
+            files = _artifact_files(root)
+
+        relative_names = [f.relative_to(root).as_posix() for f in files]
+        self.assertEqual(
+            relative_names,
+            ["alpha/spec.md", "plan.md", "spec.md", "zeta/plan.md"],
+        )
+
+    def test_artifact_files_ignores_non_target_files(self) -> None:
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "readme.md").write_text("readme", encoding="utf-8")
+            (root / "data.json").write_text("{}", encoding="utf-8")
+
+            from fa.gestate.artifacts import _artifact_files
+
+            files = _artifact_files(root)
+
+        self.assertEqual(files, [])
+
+    def test_format_artifact_diff_returns_empty_for_identical_snapshots(self) -> None:
+        snapshot = {"spec.md": "same content\n", "plan.md": "also same\n"}
+
+        diff = gestate_commands._format_artifact_diff(snapshot, snapshot)
+
+        self.assertEqual(diff, "")
+
+    def test_format_artifact_diff_returns_empty_for_both_empty(self) -> None:
+        diff = gestate_commands._format_artifact_diff({}, {})
+        self.assertEqual(diff, "")
+
+    def test_format_artifact_diff_emits_header_for_empty_content_change(self) -> None:
+        before: dict[str, str | None] = {"spec.md": None}
+        after: dict[str, str | None] = {"spec.md": ""}
+
+        diff = gestate_commands._format_artifact_diff(before, after)
+
+        self.assertIn("--- before/spec.md", diff)
+        self.assertIn("+++ after/spec.md", diff)
+
+    def test_print_round_artifact_diff_prints_changes(self) -> None:
+        before = {"spec.md": "old\n"}
+        after = {"spec.md": "new\n"}
+
+        with patch("fa.gestate.commands.typer.echo") as echo:
+            gestate_commands._print_round_artifact_diff(3, before, after)
+
+        echo.assert_called_once()
+        call_args = echo.call_args[0][0]
+        self.assertIn("Round 3 artifact diff", call_args)
+        self.assertIn("--- before/spec.md", call_args)

@@ -2,6 +2,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
+
+def _load_dotenv(path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
+    if not path.is_file():
+        return env
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        env[key.strip()] = value.strip()
+    return env
+
+
 FA_DIR_NAME = ".fa"
 TASKS_DIR_NAME = "tasks"
 ARCHIVE_DIR_NAME = "archive"

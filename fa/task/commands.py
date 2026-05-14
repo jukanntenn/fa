@@ -7,7 +7,7 @@ from typing import Annotated
 
 import typer
 
-from fa.task.model import Task
+from fa.task.model import InvalidTransition, Task
 from fa.task.runner import build_execution_plan, run_tasks
 from fa.task.storage import (
     all_tasks,
@@ -72,7 +72,9 @@ def done(id_range: str) -> None:
             has_error = True
             typer.echo(f"Error: task {task_id} not found", err=True)
             continue
-        if task.status not in {"approved", "running", "failed"}:
+        try:
+            task.complete()
+        except InvalidTransition:
             has_error = True
             typer.echo(
                 f"Error: task {task_id} is '{task.status}', "
@@ -80,8 +82,6 @@ def done(id_range: str) -> None:
                 err=True,
             )
             continue
-        task.status = "completed"
-        task.completed_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         save_task(task)
     if has_error:
         raise typer.Exit(code=1)
@@ -189,8 +189,7 @@ def _auto_complete_done_parents(tasks: dict[int, Task]) -> None:
             "completed",
             "draft",
         }:
-            task.transition_to("completed")
-            task.completed_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            task.complete()
             save_task(task)
 
 

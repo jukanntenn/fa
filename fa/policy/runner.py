@@ -13,27 +13,13 @@ from fa.core.config import (
     LOGS_DIR_NAME,
     TOOL_AGENT_ARG,
     TOOL_COMMANDS,
+    _load_dotenv,
 )
 from fa.core.git import changed_files, is_git_repo
 from fa.core.quota import check_glm_quota
 from fa.policy.model import Policy
 from fa.policy.storage import load_policy
 from fa.task.storage import fa_dir, project_root
-
-
-def _load_dotenv(path: Path) -> dict[str, str]:
-    env: dict[str, str] = {}
-    if not path.is_file():
-        return env
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        env[key.strip()] = value.strip()
-    return env
 
 
 def _iter_files(base: Path) -> list[Path]:

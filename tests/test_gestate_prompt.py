@@ -140,6 +140,27 @@ class ReadStdinTests(unittest.TestCase):
 
         self.assertEqual(result, text.strip())
 
+    def test_tty_eoferror_returns_empty(self) -> None:
+        from fa.gestate import prompting
+
+        class StdinStub(io.StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name.startswith("prompt_toolkit"):
+                raise EOFError
+            return original_import(name, *args, **kwargs)
+
+        original_import = __import__
+        with (
+            patch("fa.gestate.prompting.sys.stdin", StdinStub("")),
+            patch("builtins.__import__", side_effect=fake_import),
+        ):
+            result = prompting._read_stdin()
+
+        self.assertEqual(result, "")
+
 
 class TaskPromptTests(unittest.TestCase):
     def test_infer_memory_sequence_counts_existing_memory_files(self) -> None:
@@ -225,3 +246,60 @@ class TaskPromptTests(unittest.TestCase):
             ):
                 with self.assertRaises(FileNotFoundError):
                     build_task_prompt(task, None, is_attempt_run=False)
+
+
+class ToolAcceptsStdinTests(unittest.TestCase):
+    def test_claude_accepts_stdin(self) -> None:
+        from fa.gestate.prompting import _tool_accepts_prompt_stdin
+
+        self.assertTrue(_tool_accepts_prompt_stdin("claude"))
+
+    def test_ccr_accepts_stdin(self) -> None:
+        from fa.gestate.prompting import _tool_accepts_prompt_stdin
+
+        self.assertTrue(_tool_accepts_prompt_stdin("ccr"))
+
+    def test_codex_rejects_stdin(self) -> None:
+        from fa.gestate.prompting import _tool_accepts_prompt_stdin
+
+        self.assertFalse(_tool_accepts_prompt_stdin("codex"))
+
+
+class BuildToolCmdTests(unittest.TestCase):
+    def test_raises_valueerror_for_unknown_tool(self) -> None:
+        from fa.gestate.prompting import _build_tool_cmd
+
+        with self.assertRaises(ValueError) as ctx:
+            _build_tool_cmd("nonexistent", "hello")
+        self.assertIn("nonexistent", str(ctx.exception))
+
+    def test_builds_known_tool_command_with_prompt(self) -> None:
+        from fa.gestate.prompting import _build_tool_cmd
+
+        cmd = _build_tool_cmd("codex", "test prompt")
+        self.assertIn("test prompt", cmd)
+
+
+class IsTaskIdTests(unittest.TestCase):
+    def test_returns_false_for_non_integer(self) -> None:
+        from fa.gestate.prompting import _is_task_id
+
+        self.assertFalse(_is_task_id("abc"))
+        self.assertFalse(_is_task_id(""))
+        self.assertFalse(_is_task_id("1.5"))
+
+    def test_returns_false_for_nonexistent_id(self) -> None:
+        from fa.gestate import prompting
+
+        with patch.object(prompting, "find_task", return_value=None):
+            self.assertFalse(prompting._is_task_id("999"))
+
+    def test_returns_true_for_existing_task(self) -> None:
+        from pathlib import Path
+
+        from fa.gestate import prompting
+        from fa.task.model import Task
+
+        fake_task = Task.new(42, "exists", None, Path("/tmp/fake"))
+        with patch.object(prompting, "find_task", return_value=fake_task):
+            self.assertTrue(prompting._is_task_id("42"))

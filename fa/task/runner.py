@@ -1,37 +1,25 @@
 from __future__ import annotations
 
-import contextlib
 import logging
 import os
-import select
 import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 
-from fa.core.config import AGENT_LOGS_DIR_NAME, LOGS_DIR_NAME, TOOL_COMMANDS
+from fa.core.config import (
+    AGENT_LOGS_DIR_NAME,
+    LOGS_DIR_NAME,
+    TOOL_COMMANDS,
+    _load_dotenv,
+)
 from fa.core.logview import _LIVE_VIEWER_TOOLS, TaskViewer, ViewerController
 from fa.core.quota import check_glm_quota
+from fa.core.tty import _main_session_cbreak, _read_main_session_key
 from fa.task.model import Task
 from fa.task.prompt import build_task_prompt, infer_attempt, infer_memory_sequence
 from fa.task.storage import all_tasks, fa_dir, find_children, save_task
-
-
-def _load_dotenv(path: Path) -> dict[str, str]:
-    env: dict[str, str] = {}
-    if not path.is_file():
-        return env
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        env[key.strip()] = value.strip()
-    return env
 
 
 def _auto_complete_parent(task: Task, logger: logging.Logger) -> None:
@@ -43,8 +31,7 @@ def _auto_complete_parent(task: Task, logger: logging.Logger) -> None:
     if all(s.status == "completed" for s in siblings):
         parent_task = all_t.get(task.parent_id)
         if parent_task and parent_task.status != "completed":
-            parent_task.transition_to("completed")
-            parent_task.completed_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            parent_task.complete()
             save_task(parent_task)
             logger.info(
                 "Parent task [%d] auto-completed (all children done)", parent_task.id
@@ -85,42 +72,6 @@ def _run_tool(
     return int(completed.returncode)
 
 
-@contextlib.contextmanager
-def _main_session_cbreak():
-    if not sys.stdin.isatty():
-        yield
-        return
-    original_tty = None
-    try:
-        import termios as termios_module
-        import tty as tty_module
-
-        original_tty = termios_module.tcgetattr(sys.stdin.fileno())
-        tty_module.setcbreak(sys.stdin.fileno())
-    except Exception:
-        yield
-        return
-    try:
-        yield
-    finally:
-        if original_tty is not None:
-            termios_module.tcsetattr(
-                sys.stdin.fileno(), termios_module.TCSADRAIN, original_tty
-            )
-
-
-def _read_main_session_key() -> str | None:
-    if not sys.stdin.isatty():
-        return None
-    try:
-        readable, _, _ = select.select([sys.stdin], [], [], 0.2)
-        if not readable:
-            return None
-        return sys.stdin.read(1)
-    except OSError:
-        return None
-
-
 def _run_task_interactive(
     task: Task,
     parent: Task | None,
@@ -141,7 +92,7 @@ def _run_task_interactive(
         nonlocal failed
         memory_count = infer_memory_sequence(task) - 1
         attempt = infer_attempt(task) if attempt_mode else 1
-        feedback_count = _count_feedback_files(task) if attempt_mode else 0
+        feedback_count = infer_attempt(task) - 1 if attempt_mode else 0
         mode = "attempt" if attempt_mode else "fresh"
         for round_index in range(1, rounds + 1):
             if glm_plan and not check_glm_quota(logger):
@@ -296,10 +247,6 @@ def build_execution_plan(
     return output
 
 
-def _count_feedback_files(task: Task) -> int:
-    return len(sorted(task.path.glob("feedback-*.md")))
-
-
 def run_tasks(
     logger: logging.Logger,
     ids: list[int],
@@ -372,7 +319,7 @@ def run_tasks(
         else:
             memory_count = infer_memory_sequence(task) - 1
             attempt = infer_attempt(task) if attempt_mode else 1
-            feedback_count = _count_feedback_files(task) if attempt_mode else 0
+            feedback_count = infer_attempt(task) - 1 if attempt_mode else 0
             mode = "attempt" if attempt_mode else "fresh"
             for round_index in range(1, rounds + 1):
                 if glm_plan and not check_glm_quota(logger):
@@ -423,8 +370,7 @@ def run_tasks(
             save_task(task)
             logger.info('Task [%d] "%s" failed', task.id, task.slug)
             continue
-        task.transition_to("completed")
-        task.completed_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        task.complete()
         save_task(task)
         logger.info('Task [%d] "%s" completed', task.id, task.slug)
         _auto_complete_parent(task, logger)

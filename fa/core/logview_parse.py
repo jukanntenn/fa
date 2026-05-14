@@ -170,6 +170,22 @@ def parse_jsonl_line(line: str) -> str | None:
     return f"{_DIM}[unknown: {msg_type}]{_RESET}"
 
 
+def _extract_text_content(content: str | list) -> str:
+    if isinstance(content, list):
+        texts = [
+            c.get("text", "")
+            for c in content
+            if isinstance(c, dict) and c.get("type") == "text"
+        ]
+        return " ".join(texts)
+    return content
+
+
+def _format_tool_result(item: dict) -> str:
+    content = _extract_text_content(item.get("content", ""))
+    return f"{_DIM}[tool result]{_RESET}\n{_truncate(str(content), 2000, preserve_newlines=True)}"
+
+
 def _format_assistant(obj: dict) -> str | None:
     message = obj.get("message", {})
     contents = message.get("content", [])
@@ -192,17 +208,7 @@ def _format_assistant(obj: dict) -> str | None:
             if thinking.strip():
                 parts.append(f"{_DIM}[thinking...] {_truncate(thinking, 100)}{_RESET}")
         elif item_type == "tool_result":
-            content = item.get("content", "")
-            if isinstance(content, list):
-                texts = [
-                    c.get("text", "")
-                    for c in content
-                    if isinstance(c, dict) and c.get("type") == "text"
-                ]
-                content = " ".join(texts)
-            parts.append(
-                f"{_DIM}[tool result]{_RESET}\n{_truncate(str(content), 2000, preserve_newlines=True)}"
-            )
+            parts.append(_format_tool_result(item))
     return "\n".join(parts) if parts else None
 
 
@@ -214,17 +220,7 @@ def _format_user(obj: dict) -> str | None:
     parts: list[str] = []
     for item in contents:
         if isinstance(item, dict) and item.get("type") == "tool_result":
-            content = item.get("content", "")
-            if isinstance(content, list):
-                texts = [
-                    c.get("text", "")
-                    for c in content
-                    if isinstance(c, dict) and c.get("type") == "text"
-                ]
-                content = " ".join(texts)
-            parts.append(
-                f"{_DIM}[tool result]{_RESET}\n{_truncate(str(content), 2000, preserve_newlines=True)}"
-            )
+            parts.append(_format_tool_result(item))
     return "\n".join(parts) if parts else None
 
 
