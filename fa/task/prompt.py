@@ -9,7 +9,7 @@ from fa.task.model import Task
 from fa.task.storage import fa_dir, project_root, relative_path
 
 
-def _template_env(template_dir: Path) -> Environment:
+def template_env(template_dir: Path) -> Environment:
     return Environment(
         loader=FileSystemLoader(str(template_dir)),
         undefined=StrictUndefined,
@@ -22,8 +22,8 @@ def _template_env(template_dir: Path) -> Environment:
 def task_template() -> tuple[Environment, str]:
     override = fa_dir() / "templates"
     if (override / PROMPT_TEMPLATE_NAME).is_file():
-        return _template_env(override), PROMPT_TEMPLATE_NAME
-    return _template_env(package_template_dir()), PROMPT_TEMPLATE_NAME
+        return template_env(override), PROMPT_TEMPLATE_NAME
+    return template_env(package_template_dir()), PROMPT_TEMPLATE_NAME
 
 
 def infer_memory_sequence(task: Task) -> int:

@@ -1,21 +1,14 @@
 from __future__ import annotations
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
-
 from fa.task.model import Task
+from fa.task.prompt import template_env
 from fa.task.storage import relative_path
 
 
 def _build_review_prompt(task: Task, round_num: int, max_rounds: int) -> str:
     from fa.core.config import package_template_dir
 
-    env = Environment(
-        loader=FileSystemLoader(str(package_template_dir())),
-        undefined=StrictUndefined,
-        autoescape=False,
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
+    env = template_env(package_template_dir())
     template = env.get_template("gestate_review.j2")
     spec_files = sorted(task.path.rglob("spec.md"))
     plan_files = sorted(task.path.rglob("plan.md"))

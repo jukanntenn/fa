@@ -20,6 +20,7 @@ from fa.core.logview_parse import (
     parse_codex_line,
     parse_jsonl_line,
 )
+from fa.core.tty import cbreak_session
 
 
 @dataclasses.dataclass
@@ -41,7 +42,6 @@ class TaskViewer:
         self._viewer_log_path: Path | None = None
         self._last_log: Path | None = None
         self._log_offset = 0
-        self._original_tty = None
         self._task_done = threading.Event()
         self._task_failed = threading.Event()
         self._close_requested = threading.Event()
@@ -92,38 +92,12 @@ class TaskViewer:
 
     def run(self) -> None:
         self._close_requested.clear()
-        self._enter_cbreak()
-        try:
-            self._run_loop()
-        finally:
-            self._leave_cbreak()
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-
-    def _enter_cbreak(self) -> None:
-        if not sys.stdin.isatty():
-            return
-        import termios as termios_module
-        import tty as tty_module
-
-        try:
-            self._original_tty = termios_module.tcgetattr(sys.stdin.fileno())
-            tty_module.setcbreak(sys.stdin.fileno())
-        except Exception:
-            self._original_tty = None
-
-    def _leave_cbreak(self) -> None:
-        if self._original_tty is None:
-            return
-        import termios as termios_module
-
-        try:
-            termios_module.tcsetattr(
-                sys.stdin.fileno(), termios_module.TCSADRAIN, self._original_tty
-            )
-        except Exception:
-            pass
-        self._original_tty = None
+        with cbreak_session():
+            try:
+                self._run_loop()
+            finally:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
 
     def _run_loop(self) -> None:
         while True:

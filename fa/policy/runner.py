@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-import os
-import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -11,12 +9,11 @@ from pathlib import Path
 from fa.core.config import (
     AGENT_LOGS_DIR_NAME,
     LOGS_DIR_NAME,
-    TOOL_AGENT_ARG,
-    TOOL_COMMANDS,
-    _load_dotenv,
+    tool_extra_env,
 )
 from fa.core.git import changed_files, is_git_repo
 from fa.core.quota import check_glm_quota
+from fa.core.subprocess import run_tool
 from fa.policy.model import Policy
 from fa.policy.storage import load_policy
 from fa.task.storage import fa_dir, project_root
@@ -78,46 +75,6 @@ def _policy_prompt(policy: Policy, file_paths: list[str], report_path: str) -> s
     return "\n".join(lines)
 
 
-def _run_tool(
-    tool: str,
-    prompt: str,
-    log_file: Path,
-    logger: logging.Logger,
-    agent: str = "rectifier",
-    extra_env: dict[str, str] | None = None,
-) -> int:
-    if tool not in TOOL_COMMANDS:
-        raise ValueError(
-            f"unknown tool '{tool}'. Available: {', '.join(TOOL_COMMANDS.keys())}"
-        )
-    arg_style = TOOL_AGENT_ARG.get(tool, "--agent")
-    template = TOOL_COMMANDS[tool]
-    if arg_style == "$":
-        prompt = f"${agent} {prompt}"
-        cmd = [piece.format(prompt=prompt) for piece in template]
-    else:
-        cmd: list[str] = []
-        for piece in template:
-            if piece == "{prompt}":
-                cmd.extend([arg_style, agent])
-            cmd.append(piece.format(prompt=prompt))
-    logger.debug("Executing agent tool command: %s", cmd)
-    env = {**os.environ, **extra_env} if extra_env else None
-    try:
-        with log_file.open("w", encoding="utf-8") as handle:
-            result = subprocess.run(
-                cmd,
-                stdout=handle,
-                stderr=subprocess.STDOUT,
-                text=True,
-                check=False,
-                env=env,
-            )
-    except OSError:
-        return 1
-    return int(result.returncode)
-
-
 def _save_prompt(log_dir: Path, round_index: int, prompt: str) -> Path:
     path = log_dir / f"round-{round_index}-prompt.md"
     path.write_text(prompt, encoding="utf-8")
@@ -131,12 +88,7 @@ def run_policy(
     rounds: int,
     glm_plan: bool = False,
 ) -> int:
-    # Load .env from cwd for codex
-    extra_env: dict[str, str] | None = None
-    if tool == "codex":
-        dotenv = _load_dotenv(Path.cwd() / ".env")
-        if "CODEX_API_KEY" in dotenv:
-            extra_env = {"CODEX_API_KEY": dotenv["CODEX_API_KEY"]}
+    extra_env = tool_extra_env(tool)
 
     logs_dir = fa_dir() / LOGS_DIR_NAME / AGENT_LOGS_DIR_NAME / f"policy-{policy_id}"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -186,7 +138,7 @@ def run_policy(
             len(files),
         )
         t0 = time.monotonic()
-        code = _run_tool(
+        code = run_tool(
             tool, prompt, log_file, logger, agent=policy.agent, extra_env=extra_env
         )
         elapsed = int(time.monotonic() - t0)

@@ -8,7 +8,11 @@ import typer
 
 from fa.core.config import AGENT_LOGS_DIR_NAME, LOGS_DIR_NAME
 from fa.core.logview import _LIVE_VIEWER_TOOLS, TaskViewer, ViewerController
-from fa.gestate.artifacts import _capture_artifact_snapshot, _print_round_artifact_diff
+from fa.gestate.artifacts import (
+    _capture_artifact_snapshot,
+    _format_artifact_diff,
+    _print_round_artifact_diff,
+)
 from fa.gestate.prompting import _build_tool_cmd_for_prompt, _is_task_id, _read_stdin
 from fa.gestate.review import _build_review_prompt
 from fa.gestate.runner import _run_tool_with_optional_viewer
@@ -20,7 +24,6 @@ from fa.gestate.tasks import (
     _parse_task_reference,
     _resolve_execution_candidates,
     _resolve_task_descendants,
-    _resolve_to_leaves,
     _validate_task,
 )
 from fa.task.model import Task
@@ -42,14 +45,11 @@ __all__ = [
     "_read_stdin",
     "_resolve_execution_candidates",
     "_resolve_task_descendants",
-    "_resolve_to_leaves",
     "_run_runnable_task_tree",
     "_run_tool_with_optional_viewer",
     "_validate_task",
     "gestate",
 ]
-
-from fa.gestate.artifacts import _format_artifact_diff
 
 
 def _run_runnable_task_tree(

@@ -16,7 +16,7 @@ from fa.core.logview_parse import (
     _tool_input_summary,
     _truncate,
     _truncate_to_visible,
-    _update_active_sgr,
+    _update_sgr_depth,
 )
 from fa.core.logview_viewer import Entry, TaskViewer, ViewerController
 
@@ -40,26 +40,19 @@ class LogviewParseHelperTests(unittest.TestCase):
     def test_strip_ansi_removes_sequences_without_surrounding_text(self) -> None:
         self.assertEqual(_strip_ansi("\x1b[31mred\x1b[0m"), "red")
 
-    def test_update_active_sgr_tracks_and_clears_style_categories(self) -> None:
-        active: set[str] = set()
+    def test_update_sgr_depth_resets_counter(self) -> None:
+        depth = [0]
+        _update_sgr_depth("1;31", depth)
+        self.assertEqual(depth[0], 2)
+        _update_sgr_depth("0", depth)
+        self.assertEqual(depth[0], 0)
 
-        _update_active_sgr("\033[1;31m", active)
-        self.assertEqual(active, set())
-
-        _update_active_sgr("\033[39m", active)
-        self.assertEqual(active, set())
-
-        _update_active_sgr(_RESET, active)
-        self.assertEqual(active, set())
-
-    def test_update_active_sgr_tracks_style_categories(self) -> None:
-        active: set[str] = set()
-        _update_active_sgr("1;31", active)
-        self.assertIn("intensity", active)
-        self.assertIn("fg", active)
-        _update_active_sgr("22;39", active)
-        self.assertNotIn("intensity", active)
-        self.assertNotIn("fg", active)
+    def test_update_sgr_depth_increments_and_decrements(self) -> None:
+        depth = [0]
+        _update_sgr_depth("1;31", depth)
+        self.assertEqual(depth[0], 2)
+        _update_sgr_depth("22;39", depth)
+        self.assertEqual(depth[0], 0)
 
     def test_parse_jsonl_line_returns_raw_line_for_invalid_json(self) -> None:
         self.assertEqual(parse_jsonl_line("not json"), "\x1b[2m[raw] not json\x1b[0m")

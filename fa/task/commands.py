@@ -12,11 +12,12 @@ from fa.task.runner import build_execution_plan, run_tasks
 from fa.task.storage import (
     all_tasks,
     archive_dir,
+    auto_complete_all_eligible_parents,
     create_task,
-    find_children,
     find_task,
     parse_id_range,
     relative_path,
+    resolve_to_leaves,
     save_task,
 )
 
@@ -159,40 +160,6 @@ def archive(id_range: Annotated[str | None, typer.Argument()] = None) -> None:
         raise typer.Exit(code=1)
 
 
-def _resolve_to_leaves(task_ids: list[int], tasks: dict[int, Task]) -> list[int]:
-    """Expand parent task IDs to their children. Return deduplicated leaf IDs."""
-    leaves: list[int] = []
-    seen: set[int] = set()
-    for tid in task_ids:
-        children = find_children(tid)
-        if children:
-            for child in children:
-                if child.id not in seen:
-                    leaves.append(child.id)
-                    seen.add(child.id)
-        else:
-            if tid not in seen:
-                leaves.append(tid)
-                seen.add(tid)
-    return leaves
-
-
-def _auto_complete_done_parents(tasks: dict[int, Task]) -> None:
-    """Auto-complete parent tasks whose children are all completed."""
-    for task in tasks.values():
-        if task.parent_id is not None:
-            continue
-        children = find_children(task.id)
-        if not children:
-            continue
-        if all(c.status == "completed" for c in children) and task.status not in {
-            "completed",
-            "draft",
-        }:
-            task.complete()
-            save_task(task)
-
-
 @task_app.command("run")
 def run(
     ids: str | None = typer.Option(None, "--ids"),
@@ -217,7 +184,7 @@ def run(
     tasks = all_tasks()
 
     # Auto-complete parents whose children are all done (EC1)
-    _auto_complete_done_parents(tasks)
+    auto_complete_all_eligible_parents(tasks)
     tasks = all_tasks()
 
     # Build candidate list
@@ -230,7 +197,7 @@ def run(
                 err=True,
             )
             raise typer.Exit(code=1)
-        candidates = _resolve_to_leaves(raw_ids, tasks)
+        candidates = resolve_to_leaves(raw_ids, tasks)
         if force:
             # EC7: --force skips completed children, doesn't re-run them
             candidates = [cid for cid in candidates if tasks[cid].status != "completed"]
@@ -257,7 +224,7 @@ def run(
                 )
                 raise typer.Exit(code=1)
     elif attempt:
-        leaf_ids = _resolve_to_leaves(sorted(tasks.keys()), tasks)
+        leaf_ids = resolve_to_leaves(sorted(tasks.keys()), tasks)
         candidates = [
             tid
             for tid in leaf_ids
@@ -266,7 +233,7 @@ def run(
             and list(tasks[tid].path.glob("feedback-*.md"))
         ]
     else:
-        leaf_ids = _resolve_to_leaves(sorted(tasks.keys()), tasks)
+        leaf_ids = resolve_to_leaves(sorted(tasks.keys()), tasks)
         candidates = [
             tid for tid in leaf_ids if tasks[tid].status in {"approved", "failed"}
         ]

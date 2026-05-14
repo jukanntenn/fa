@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -46,33 +47,25 @@ def archive_dir() -> Path:
     return tasks_dir() / ARCHIVE_DIR_NAME
 
 
-def all_tasks() -> dict[int, Task]:
+def all_tasks(*, include_archive: bool = False) -> dict[int, Task]:
     root = tasks_dir()
     result: dict[int, Task] = {}
-    for task_json in root.rglob(TASK_JSON_FILE_NAME):
-        if ARCHIVE_DIR_NAME in task_json.parts:
-            continue
-        data = _read_json(task_json)
-        if not data:
-            continue
-        task = Task.from_dict(data, task_json.parent)
-        result[task.id] = task
-    return result
-
-
-def all_task_ids(include_archive: bool = False) -> set[int]:
-    root = tasks_dir()
-    result: set[int] = set()
     for task_json in root.rglob(TASK_JSON_FILE_NAME):
         if not include_archive and ARCHIVE_DIR_NAME in task_json.parts:
             continue
         data = _read_json(task_json)
         if not data:
             continue
-        task_id = data.get("id")
-        if isinstance(task_id, int):
-            result.add(task_id)
+        try:
+            task = Task.from_dict(data, task_json.parent)
+        except (ValueError, KeyError, TypeError):
+            continue
+        result[task.id] = task
     return result
+
+
+def all_task_ids(include_archive: bool = False) -> set[int]:
+    return set(all_tasks(include_archive=include_archive).keys())
 
 
 def find_task(task_id: int) -> Task | None:
@@ -83,12 +76,39 @@ def find_children(parent_id: int) -> list[Task]:
     return [t for t in all_tasks().values() if t.parent_id == parent_id]
 
 
+def resolve_to_leaves(task_ids: list[int], tasks: dict[int, Task]) -> list[int]:
+    leaves: list[int] = []
+    seen: set[int] = set()
+
+    def visit(task_id: int) -> None:
+        children = sorted(
+            [t for t in tasks.values() if t.parent_id == task_id],
+            key=lambda t: t.id,
+        )
+        if not children:
+            if task_id not in seen:
+                leaves.append(task_id)
+                seen.add(task_id)
+            return
+        for child in children:
+            visit(child.id)
+
+    for task_id in task_ids:
+        if task_id in tasks:
+            visit(task_id)
+    return leaves
+
+
 def next_task_id(parent_id: int | None = None) -> int:
-    tasks = all_tasks()
-    used_ids = all_task_ids(include_archive=True)
+    tasks = all_tasks(include_archive=True)
+    used_ids = set(tasks.keys())
     if not used_ids:
         return 1
-    if parent_id is None or parent_id not in tasks:
+    if (
+        parent_id is None
+        or parent_id not in tasks
+        or ARCHIVE_DIR_NAME in tasks[parent_id].path.parts
+    ):
         return max(used_ids) + 1
     candidate = parent_id + 1
     while candidate in used_ids:
@@ -132,3 +152,38 @@ def parse_id_range(value: str) -> list[int]:
 
 def relative_path(path: Path) -> str:
     return str(path.relative_to(project_root()))
+
+
+def auto_complete_parent_of(
+    tasks: dict[int, Task],
+    task: Task,
+    logger: logging.Logger | None = None,
+) -> None:
+    if not task.parent_id:
+        return
+    parent = tasks.get(task.parent_id)
+    if parent is None or parent.status in {"completed", "draft"}:
+        return
+    children = [t for t in tasks.values() if t.parent_id == parent.id]
+    if children and all(c.status == "completed" for c in children):
+        parent.complete()
+        save_task(parent)
+        if logger:
+            logger.info(
+                "Parent task [%d] auto-completed (all children done)", parent.id
+            )
+
+
+def auto_complete_all_eligible_parents(tasks: dict[int, Task]) -> None:
+    for t in tasks.values():
+        if t.parent_id is not None:
+            continue
+        children = [c for c in tasks.values() if c.parent_id == t.id]
+        if not children:
+            continue
+        if all(c.status == "completed" for c in children) and t.status not in {
+            "completed",
+            "draft",
+        }:
+            t.complete()
+            save_task(t)

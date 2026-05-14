@@ -58,7 +58,7 @@ class GestateRunnerTests(unittest.TestCase):
             with (
                 patch("fa.gestate.runner.sys.stdin.isatty", return_value=False),
                 patch(
-                    "fa.gestate.commands.subprocess.Popen",
+                    "fa.gestate.runner.subprocess.Popen",
                     return_value=fake_process,
                 ),
             ):
@@ -98,7 +98,7 @@ class GestateRunnerTests(unittest.TestCase):
             with (
                 patch("fa.gestate.runner.sys.stdin.isatty", return_value=False),
                 patch(
-                    "fa.gestate.commands.subprocess.Popen",
+                    "fa.gestate.runner.subprocess.Popen",
                     return_value=fake_process,
                 ) as popen,
             ):
@@ -226,7 +226,7 @@ class GestateRunnerTests(unittest.TestCase):
             with (
                 patch("fa.gestate.runner.sys.stdin.isatty", return_value=True),
                 patch(
-                    "fa.gestate.commands.subprocess.Popen",
+                    "fa.gestate.runner.subprocess.Popen",
                     return_value=FakeProcess(),
                 ),
                 patch(

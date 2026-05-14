@@ -29,28 +29,76 @@ class ChangedFilesTests(unittest.TestCase):
             self.assertEqual(result, [])
             mock_run.assert_not_called()
 
-    def test_deduplicates_across_commands(self) -> None:
+    def test_unstaged_tracked_change(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / ".git").mkdir()
 
             def fake_run(cmd, **kwargs):
-                stdout = ""
-                if "--cached" in cmd:
-                    stdout = "README.md"
-                elif "--others" in cmd:
-                    stdout = "README.md\nnew.txt"
-                else:
-                    stdout = "README.md"
-                return subprocess.CompletedProcess(cmd, 0, stdout=stdout)
+                return subprocess.CompletedProcess(cmd, 0, stdout=" M file.txt\n")
+
+            with patch.object(subprocess, "run", side_effect=fake_run):
+                result = git.changed_files(root)
+
+            self.assertEqual(result, [root / "file.txt"])
+
+    def test_staged_change(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".git").mkdir()
+
+            def fake_run(cmd, **kwargs):
+                return subprocess.CompletedProcess(cmd, 0, stdout="M  staged.txt\n")
+
+            with patch.object(subprocess, "run", side_effect=fake_run):
+                result = git.changed_files(root)
+
+            self.assertEqual(result, [root / "staged.txt"])
+
+    def test_untracked_file(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".git").mkdir()
+
+            def fake_run(cmd, **kwargs):
+                return subprocess.CompletedProcess(cmd, 0, stdout="?? new.txt\n")
+
+            with patch.object(subprocess, "run", side_effect=fake_run):
+                result = git.changed_files(root)
+
+            self.assertEqual(result, [root / "new.txt"])
+
+    def test_deduplicates_staged_and_modified(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".git").mkdir()
+
+            def fake_run(cmd, **kwargs):
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="MM file.txt\n M other.txt\n"
+                )
 
             with patch.object(subprocess, "run", side_effect=fake_run):
                 result = git.changed_files(root)
 
             paths = [str(p) for p in result]
-            self.assertEqual(len(paths), len(set(paths)))
-            self.assertIn(str(root / "README.md"), paths)
-            self.assertIn(str(root / "new.txt"), paths)
+            self.assertEqual(paths.count(str(root / "file.txt")), 1)
+            self.assertIn(str(root / "other.txt"), paths)
+
+    def test_staged_rename_returns_new_path(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".git").mkdir()
+
+            def fake_run(cmd, **kwargs):
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="R  old_name.txt -> new_name.txt\n"
+                )
+
+            with patch.object(subprocess, "run", side_effect=fake_run):
+                result = git.changed_files(root)
+
+            self.assertEqual(result, [root / "new_name.txt"])
 
     def test_ignores_blank_lines(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -71,13 +119,9 @@ class ChangedFilesTests(unittest.TestCase):
             (root / ".git").mkdir()
 
             def fake_run(cmd, **kwargs):
-                if "--cached" in cmd:
-                    stdout = "zebra.txt"
-                elif "--others" in cmd:
-                    stdout = "alpha.txt"
-                else:
-                    stdout = "mid.txt"
-                return subprocess.CompletedProcess(cmd, 0, stdout=stdout)
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="?? zebra.txt\n M mid.txt\nA  alpha.txt\n"
+                )
 
             with patch.object(subprocess, "run", side_effect=fake_run):
                 result = git.changed_files(root)
@@ -86,6 +130,42 @@ class ChangedFilesTests(unittest.TestCase):
                 self.assertTrue(path.is_absolute())
             names = [p.name for p in result]
             self.assertEqual(names, sorted(names))
+
+
+class ParsePorcelainLineTests(unittest.TestCase):
+    def test_unstaged_modified(self) -> None:
+        self.assertEqual(git.parse_porcelain_line(" M file.txt"), "file.txt")
+
+    def test_staged_modified(self) -> None:
+        self.assertEqual(git.parse_porcelain_line("M  staged.txt"), "staged.txt")
+
+    def test_untracked(self) -> None:
+        self.assertEqual(git.parse_porcelain_line("?? new.txt"), "new.txt")
+
+    def test_staged_rename(self) -> None:
+        self.assertEqual(git.parse_porcelain_line("R  old.txt -> new.txt"), "new.txt")
+
+    def test_copied_file(self) -> None:
+        self.assertEqual(
+            git.parse_porcelain_line("C  orig.txt -> copy.txt"), "copy.txt"
+        )
+
+    def test_deleted(self) -> None:
+        self.assertEqual(git.parse_porcelain_line(" D gone.txt"), "gone.txt")
+
+    def test_blank_line(self) -> None:
+        self.assertIsNone(git.parse_porcelain_line(""))
+
+    def test_whitespace_only(self) -> None:
+        self.assertIsNone(git.parse_porcelain_line("   "))
+
+    def test_empty_path(self) -> None:
+        self.assertIsNone(git.parse_porcelain_line("M  "))
+
+    def test_path_with_spaces(self) -> None:
+        self.assertEqual(
+            git.parse_porcelain_line("?? path with spaces.txt"), "path with spaces.txt"
+        )
 
 
 if __name__ == "__main__":

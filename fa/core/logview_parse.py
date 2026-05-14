@@ -30,90 +30,39 @@ def _truncate(text: str, max_len: int = 200, preserve_newlines: bool = False) ->
 
 _ANSI_CSI_END = frozenset(chr(c) for c in range(0x40, 0x7F))
 _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-_SGR_CLOSE_CATEGORIES = {
-    "22": {"intensity"},
-    "23": {"italic"},
-    "24": {"underline"},
-    "25": {"blink"},
-    "27": {"inverse"},
-    "28": {"hidden"},
-    "29": {"strike"},
-    "39": {"fg"},
-    "49": {"bg"},
-}
 
 
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
-def _update_active_sgr(params: str, active_sgr: set[str]) -> None:
+def _update_sgr_depth(params: str, depth: list[int]) -> None:
     codes = params.split(";") if params else ["0"]
     i = 0
     while i < len(codes):
         code = codes[i] or "0"
         if code == "0":
-            active_sgr.clear()
-        elif code in _SGR_CLOSE_CATEGORIES:
-            active_sgr.difference_update(_SGR_CLOSE_CATEGORIES[code])
-        elif code in {"1", "2"}:
-            active_sgr.add("intensity")
-        elif code == "3":
-            active_sgr.add("italic")
-        elif code == "4":
-            active_sgr.add("underline")
-        elif code == "5":
-            active_sgr.add("blink")
-        elif code == "7":
-            active_sgr.add("inverse")
-        elif code == "8":
-            active_sgr.add("hidden")
-        elif code == "9":
-            active_sgr.add("strike")
+            depth[0] = 0
         elif code in {
-            "30",
-            "31",
-            "32",
-            "33",
-            "34",
-            "35",
-            "36",
-            "37",
-            "90",
-            "91",
-            "92",
-            "93",
-            "94",
-            "95",
-            "96",
-            "97",
+            "22",
+            "23",
+            "24",
+            "25",
+            "27",
+            "28",
+            "29",
+            "39",
+            "49",
         }:
-            active_sgr.add("fg")
-        elif code in {
-            "40",
-            "41",
-            "42",
-            "43",
-            "44",
-            "45",
-            "46",
-            "47",
-            "100",
-            "101",
-            "102",
-            "103",
-            "104",
-            "105",
-            "106",
-            "107",
-        }:
-            active_sgr.add("bg")
+            depth[0] = max(0, depth[0] - 1)
         elif code in {"38", "48"}:
-            active_sgr.add("fg" if code == "38" else "bg")
             if i + 1 < len(codes) and codes[i + 1] == "5":
                 i += 2
             elif i + 1 < len(codes) and codes[i + 1] == "2":
                 i += 4
+            depth[0] += 1
+        else:
+            depth[0] += 1
         i += 1
 
 
@@ -123,7 +72,7 @@ def _truncate_to_visible(line: str, max_cols: int) -> str:
     result: list[str] = []
     visible = 0
     i = 0
-    active_sgr: set[str] = set()
+    sgr_depth = [0]
     while i < len(line):
         if visible >= max_cols:
             break
@@ -137,14 +86,14 @@ def _truncate_to_visible(line: str, max_cols: int) -> str:
             seq = line[i : j + 1]
             result.append(seq)
             if seq.endswith("m"):
-                _update_active_sgr(seq[2:-1], active_sgr)
+                _update_sgr_depth(seq[2:-1], sgr_depth)
             i = j + 1
             continue
         result.append(ch)
         visible += 1
         i += 1
     text = "".join(result)
-    if active_sgr:
+    if sgr_depth[0]:
         text += _RESET
     return text
 

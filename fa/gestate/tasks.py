@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 from pathlib import Path
 
 import typer
 
 from fa.task.model import Task
-from fa.task.runner import build_execution_plan, run_tasks
-from fa.task.storage import all_tasks, find_children, find_task, save_task
+from fa.task.storage import (
+    all_tasks,
+    find_children,
+    find_task,
+    resolve_to_leaves,
+    save_task,
+)
 
 
 def _find_new_parent_task(preexisting_ids: frozenset[int]) -> Task | None:
@@ -124,63 +128,13 @@ def _approve_task_descendants(task: Task) -> tuple[int, int, bool]:
     return approved_count, len(descendants), approval_failed
 
 
-def _resolve_to_leaves(task_ids: list[int]) -> list[int]:
-    tasks = all_tasks()
-    leaves: list[int] = []
-    seen: set[int] = set()
-
-    def visit(task_id: int) -> None:
-        children = sorted(find_children(task_id), key=lambda item: item.id)
-        if not children:
-            if task_id not in seen:
-                leaves.append(task_id)
-                seen.add(task_id)
-            return
-        for child in children:
-            visit(child.id)
-
-    for task_id in task_ids:
-        if task_id in tasks:
-            visit(task_id)
-    return leaves
-
-
 def _resolve_execution_candidates(task: Task) -> list[int]:
     tasks = all_tasks()
-    leaf_ids = _resolve_to_leaves([task.id])
+    leaf_ids = resolve_to_leaves([task.id], tasks)
     return sorted(
         task_id
         for task_id in leaf_ids
         if task_id in tasks and tasks[task_id].status in {"approved", "failed"}
-    )
-
-
-def _run_runnable_task_tree(
-    task: Task,
-    logger: logging.Logger,
-    tool: str,
-    rounds: int,
-    glm_plan: bool,
-    *,
-    open_viewer: bool = False,
-) -> int:
-    tasks = all_tasks()
-    candidates = _resolve_execution_candidates(task)
-    if not candidates:
-        logger.info("No runnable tasks to run after gestate.")
-        typer.echo("No runnable tasks to run after gestate.")
-        return 0
-    plan = build_execution_plan(tasks, candidates)
-    typer.echo(f"Running task(s) after gestate: {','.join(str(i) for i in plan)}")
-    return run_tasks(
-        logger=logger,
-        ids=plan,
-        force=False,
-        tool=tool,
-        rounds=rounds,
-        glm_plan=glm_plan,
-        attempt_mode=False,
-        open_viewer=open_viewer,
     )
 
 
@@ -189,26 +143,23 @@ def _validate_task(task: Task) -> list[str]:
     if task.status != "draft":
         issues.append(f"task {task.id} status is '{task.status}', expected 'draft'")
     all_t = all_tasks()
-    has_children = any(t.parent_id == task.id for t in all_t.values())
+    has_children = bool(find_children(task.id))
+
+    need_spec = True
+    need_plan = True
 
     if has_children:
-        if not (task.path / "spec.md").exists():
-            issues.append(f"task {task.id} missing spec.md")
+        need_plan = False
+    elif task.parent_id is not None and task.parent_id in all_t:
+        need_spec = False
+
+    if need_spec and not (task.path / "spec.md").exists():
+        issues.append(f"task {task.id} missing spec.md")
+    if need_plan and not (task.path / "plan.md").exists():
+        issues.append(f"task {task.id} missing plan.md")
+
+    if has_children:
         for child in all_t.values():
             if child.parent_id == task.id and not (child.path / "plan.md").exists():
                 issues.append(f"subtask {child.id} missing plan.md")
-    elif task.parent_id is not None:
-        if task.parent_id in all_t:
-            if not (task.path / "plan.md").exists():
-                issues.append(f"task {task.id} missing plan.md")
-        else:
-            if not (task.path / "spec.md").exists():
-                issues.append(f"task {task.id} missing spec.md")
-            if not (task.path / "plan.md").exists():
-                issues.append(f"task {task.id} missing plan.md")
-    else:
-        if not (task.path / "spec.md").exists():
-            issues.append(f"task {task.id} missing spec.md")
-        if not (task.path / "plan.md").exists():
-            issues.append(f"task {task.id} missing plan.md")
     return issues

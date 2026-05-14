@@ -82,7 +82,7 @@ class GestatePromptTests(unittest.TestCase):
         self,
     ) -> None:
         with patch(
-            "fa.gestate.prompting.TOOL_COMMANDS",
+            "fa.core.config.TOOL_COMMANDS",
             {
                 "echo": ["echo", "", "--flag", "{prompt}"],
             },
@@ -96,7 +96,7 @@ class GestatePromptTests(unittest.TestCase):
 
     def test_stream_prompt_keeps_placeholder_when_needed_for_empty_prompt(self) -> None:
         with patch(
-            "fa.gestate.prompting.TOOL_COMMANDS",
+            "fa.core.config.TOOL_COMMANDS",
             {
                 "echo": ["echo", "{prompt}"],
             },
@@ -267,16 +267,16 @@ class ToolAcceptsStdinTests(unittest.TestCase):
 
 class BuildToolCmdTests(unittest.TestCase):
     def test_raises_valueerror_for_unknown_tool(self) -> None:
-        from fa.gestate.prompting import _build_tool_cmd
+        from fa.core.config import build_tool_cmd
 
         with self.assertRaises(ValueError) as ctx:
-            _build_tool_cmd("nonexistent", "hello")
+            build_tool_cmd("nonexistent", "hello")
         self.assertIn("nonexistent", str(ctx.exception))
 
     def test_builds_known_tool_command_with_prompt(self) -> None:
-        from fa.gestate.prompting import _build_tool_cmd
+        from fa.core.config import build_tool_cmd
 
-        cmd = _build_tool_cmd("codex", "test prompt")
+        cmd = build_tool_cmd("codex", "test prompt")
         self.assertIn("test prompt", cmd)
 
 

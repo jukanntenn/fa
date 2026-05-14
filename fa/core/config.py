@@ -3,6 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 
+def _strip_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
 def _load_dotenv(path: Path) -> dict[str, str]:
     env: dict[str, str] = {}
     if not path.is_file():
@@ -14,7 +20,7 @@ def _load_dotenv(path: Path) -> dict[str, str]:
         if "=" not in stripped:
             continue
         key, _, value = stripped.partition("=")
-        env[key.strip()] = value.strip()
+        env[key.strip()] = _strip_quotes(value.strip())
     return env
 
 
@@ -69,6 +75,36 @@ TOOL_AGENT_ARG: dict[str, str] = {
     "kilo": "--agent",
     "codex": "$",
 }
+
+
+def build_tool_cmd(tool: str, prompt: str, *, agent: str | None = None) -> list[str]:
+    if tool not in TOOL_COMMANDS:
+        raise ValueError(
+            f"unknown tool '{tool}'. Available: {', '.join(TOOL_COMMANDS.keys())}"
+        )
+    template = TOOL_COMMANDS[tool]
+    if agent is not None:
+        arg_style = TOOL_AGENT_ARG.get(tool, "--agent")
+        if arg_style == "$":
+            agent_prompt = f"${agent} {prompt}"
+            return [part.format(prompt=agent_prompt) for part in template]
+        cmd: list[str] = []
+        for piece in template:
+            if piece == "{prompt}":
+                cmd.extend([arg_style, agent])
+            cmd.append(piece.format(prompt=prompt))
+        return cmd
+    return [part.format(prompt=prompt) for part in template]
+
+
+def tool_extra_env(tool: str) -> dict[str, str] | None:
+    if tool != "codex":
+        return None
+    dotenv = _load_dotenv(Path.cwd() / ".env")
+    if "CODEX_API_KEY" in dotenv:
+        return {"CODEX_API_KEY": dotenv["CODEX_API_KEY"]}
+    return None
+
 
 VALID_STATUSES = {"draft", "approved", "running", "failed", "completed"}
 

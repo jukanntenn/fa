@@ -6,7 +6,7 @@ import sys
 
 
 @contextlib.contextmanager
-def _main_session_cbreak():
+def cbreak_session():
     if not sys.stdin.isatty():
         yield
         return

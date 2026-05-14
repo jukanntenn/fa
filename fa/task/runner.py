@@ -6,70 +6,92 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from fa.core.config import (
     AGENT_LOGS_DIR_NAME,
     LOGS_DIR_NAME,
-    TOOL_COMMANDS,
-    _load_dotenv,
+    build_tool_cmd,
+    tool_extra_env,
 )
 from fa.core.logview import _LIVE_VIEWER_TOOLS, TaskViewer, ViewerController
 from fa.core.quota import check_glm_quota
-from fa.core.tty import _main_session_cbreak, _read_main_session_key
+from fa.core.subprocess import run_tool
+from fa.core.tty import _read_main_session_key, cbreak_session
 from fa.task.model import Task
 from fa.task.prompt import build_task_prompt, infer_attempt, infer_memory_sequence
-from fa.task.storage import all_tasks, fa_dir, find_children, save_task
+from fa.task.storage import all_tasks, auto_complete_parent_of, fa_dir, save_task
 
 
-def _auto_complete_parent(task: Task, logger: logging.Logger) -> None:
-    """Auto-complete parent task if all children are done."""
-    if not task.parent_id:
-        return
-    all_t = all_tasks()
-    siblings = find_children(task.parent_id)
-    if all(s.status == "completed" for s in siblings):
-        parent_task = all_t.get(task.parent_id)
-        if parent_task and parent_task.status != "completed":
-            parent_task.complete()
-            save_task(parent_task)
-            logger.info(
-                "Parent task [%d] auto-completed (all children done)", parent_task.id
-            )
+@dataclass(frozen=True)
+class PromptRunContext:
+    memory_count: int
+    attempt: int
+    feedback_count: int
+    mode: str
 
 
-def _tool_cmd(tool: str, prompt: str) -> list[str]:
-    if tool not in TOOL_COMMANDS:
-        raise ValueError(
-            f"unknown tool '{tool}'. Available: {', '.join(TOOL_COMMANDS.keys())}"
-        )
-    template = TOOL_COMMANDS[tool]
-    return [part.format(prompt=prompt) for part in template]
+def _prompt_run_context(task: Task, attempt_mode: bool) -> PromptRunContext:
+    inferred_attempt = infer_attempt(task)
+    return PromptRunContext(
+        memory_count=infer_memory_sequence(task) - 1,
+        attempt=inferred_attempt if attempt_mode else 1,
+        feedback_count=inferred_attempt - 1 if attempt_mode else 0,
+        mode="attempt" if attempt_mode else "fresh",
+    )
 
 
-def _run_tool(
+def _prepare_round(
+    task: Task,
+    parent: Task | None,
+    attempt_mode: bool,
+    ctx: PromptRunContext,
+    log_dir: Path,
+    round_index: int,
+    rounds: int,
     tool: str,
-    prompt: str,
-    log_file: Path,
     logger: logging.Logger,
-    extra_env: dict[str, str] | None = None,
-) -> int:
-    cmd = _tool_cmd(tool, prompt)
-    logger.debug("Executing agent tool command: %s", cmd)
-    env = {**os.environ, **extra_env} if extra_env else None
-    try:
-        with log_file.open("w", encoding="utf-8") as file:
-            completed = subprocess.run(
-                cmd,
-                stdout=file,
-                stderr=subprocess.STDOUT,
-                text=True,
-                check=False,
-                env=env,
-            )
-    except OSError:
-        return 1
-    return int(completed.returncode)
+) -> tuple[str, Path]:
+    prompt = build_task_prompt(task, parent, is_attempt_run=attempt_mode)
+    _save_prompt(log_dir, round_index, ctx.attempt, attempt_mode, prompt)
+    logger.debug(
+        "Prompt rendered | mode=%s | attempt=%d | memory_files=%d | feedback_files=%d | chars=%d",
+        ctx.mode,
+        ctx.attempt,
+        ctx.memory_count,
+        ctx.feedback_count,
+        len(prompt),
+    )
+    logger.info(
+        "Task [%d] round %d/%d started | tool=%s",
+        task.id,
+        round_index,
+        rounds,
+        tool,
+    )
+    log_path = log_dir / f"round-{round_index}-{tool}.log"
+    return prompt, log_path
+
+
+def _should_run_round(
+    task_id: int,
+    round_index: int,
+    rounds: int,
+    glm_plan: bool,
+    logger: logging.Logger,
+) -> bool:
+    if not glm_plan:
+        return True
+    if check_glm_quota(logger):
+        return True
+    logger.error(
+        "Task [%d] round %d/%d skipped - GLM quota check failed",
+        task_id,
+        round_index,
+        rounds,
+    )
+    return False
 
 
 def _run_task_interactive(
@@ -90,42 +112,26 @@ def _run_task_interactive(
 
     def _execute_rounds() -> None:
         nonlocal failed
-        memory_count = infer_memory_sequence(task) - 1
-        attempt = infer_attempt(task) if attempt_mode else 1
-        feedback_count = infer_attempt(task) - 1 if attempt_mode else 0
-        mode = "attempt" if attempt_mode else "fresh"
+        ctx = _prompt_run_context(task, attempt_mode)
         for round_index in range(1, rounds + 1):
-            if glm_plan and not check_glm_quota(logger):
-                logger.error(
-                    "Task [%d] round %d/%d skipped - GLM quota check failed",
-                    task.id,
-                    round_index,
-                    rounds,
-                )
+            if not _should_run_round(task.id, round_index, rounds, glm_plan, logger):
                 failed = True
                 viewer.mark_failed()
                 return
-            prompt = build_task_prompt(task, parent, is_attempt_run=attempt_mode)
-            _save_prompt(log_dir, round_index, attempt, attempt_mode, prompt)
-            logger.debug(
-                "Prompt rendered | mode=%s | attempt=%d | memory_files=%d | feedback_files=%d | chars=%d",
-                mode,
-                attempt,
-                memory_count,
-                feedback_count,
-                len(prompt),
-            )
-            logger.info(
-                "Task [%d] round %d/%d started | tool=%s",
-                task.id,
+            prompt, log_path = _prepare_round(
+                task,
+                parent,
+                attempt_mode,
+                ctx,
+                log_dir,
                 round_index,
                 rounds,
                 tool,
+                logger,
             )
-            log_path = log_dir / f"round-{round_index}-{tool}.log"
             viewer_log_path = log_path.with_name(f"{log_path.stem}-viewer.log")
             viewer.start_round(round_index, log_path, viewer_log_path)
-            cmd = _tool_cmd(tool, prompt)
+            cmd = build_tool_cmd(tool, prompt)
             env = {**os.environ, **extra_env} if extra_env else None
             log_path.parent.mkdir(parents=True, exist_ok=True)
             t0 = time.monotonic()
@@ -168,7 +174,7 @@ def _run_task_interactive(
         logger.info("Agent running. Press Ctrl+L to open the log viewer.")
         if open_viewer:
             viewer_controller.open()
-        with _main_session_cbreak():
+        with cbreak_session():
             while True:
                 if not worker.is_alive():
                     break
@@ -182,6 +188,40 @@ def _run_task_interactive(
     viewer_controller.wait_closed()
     viewer._drain_current_log()
     return failed
+
+
+def _run_task_batch(
+    task: Task,
+    parent: Task | None,
+    tool: str,
+    rounds: int,
+    logger: logging.Logger,
+    extra_env: dict[str, str] | None,
+    attempt_mode: bool,
+    glm_plan: bool,
+    log_dir: Path,
+) -> bool:
+    ctx = _prompt_run_context(task, attempt_mode)
+    for round_index in range(1, rounds + 1):
+        if not _should_run_round(task.id, round_index, rounds, glm_plan, logger):
+            return True
+        prompt, log_path = _prepare_round(
+            task, parent, attempt_mode, ctx, log_dir, round_index, rounds, tool, logger
+        )
+        t0 = time.monotonic()
+        code = run_tool(tool, prompt, log_path, logger, extra_env=extra_env)
+        elapsed = int(time.monotonic() - t0)
+        logger.info(
+            "Task [%d] round %d/%d completed in %ds | exit_code=%d",
+            task.id,
+            round_index,
+            rounds,
+            elapsed,
+            code,
+        )
+        if code != 0:
+            return True
+    return False
 
 
 def _task_log_dir(task: Task) -> Path:
@@ -269,24 +309,20 @@ def run_tasks(
                 task.completed_at = None
                 save_task(task)
 
-    # Load .env from cwd for codex
-    extra_env: dict[str, str] | None = None
-    if tool == "codex":
-        dotenv = _load_dotenv(Path.cwd() / ".env")
-        if "CODEX_API_KEY" in dotenv:
-            extra_env = {"CODEX_API_KEY": dotenv["CODEX_API_KEY"]}
+    extra_env = tool_extra_env(tool)
 
     plan = ids
     logger.info("Execution plan: %d tasks %s", len(plan), plan)
     has_failure = False
     open_viewer_for_next_live_task = open_viewer
     for task_id in plan:
-        task = all_tasks().get(task_id)
+        snapshot = all_tasks()
+        task = snapshot.get(task_id)
         if task is None:
             logger.error("Task [%d] not found", task_id)
             has_failure = True
             continue
-        parent = all_tasks().get(task.parent_id) if task.parent_id else None
+        parent = snapshot.get(task.parent_id) if task.parent_id else None
         try:
             build_task_prompt(task, parent, is_attempt_run=attempt_mode)
         except FileNotFoundError:
@@ -314,58 +350,21 @@ def run_tasks(
                 open_viewer=open_viewer_for_next_live_task,
             )
             open_viewer_for_next_live_task = False
-            if failed:
-                has_failure = True
         else:
-            memory_count = infer_memory_sequence(task) - 1
-            attempt = infer_attempt(task) if attempt_mode else 1
-            feedback_count = infer_attempt(task) - 1 if attempt_mode else 0
-            mode = "attempt" if attempt_mode else "fresh"
-            for round_index in range(1, rounds + 1):
-                if glm_plan and not check_glm_quota(logger):
-                    logger.error(
-                        "Task [%d] round %d/%d skipped - GLM quota check failed",
-                        task.id,
-                        round_index,
-                        rounds,
-                    )
-                    failed = True
-                    break
-                prompt = build_task_prompt(task, parent, is_attempt_run=attempt_mode)
-                _save_prompt(log_dir, round_index, attempt, attempt_mode, prompt)
-                logger.debug(
-                    "Prompt rendered | mode=%s | attempt=%d | memory_files=%d | feedback_files=%d | chars=%d",
-                    mode,
-                    attempt,
-                    memory_count,
-                    feedback_count,
-                    len(prompt),
-                )
-                logger.info(
-                    "Task [%d] round %d/%d started | tool=%s",
-                    task.id,
-                    round_index,
-                    rounds,
-                    tool,
-                )
-                log_path = log_dir / f"round-{round_index}-{tool}.log"
-                t0 = time.monotonic()
-                code = _run_tool(tool, prompt, log_path, logger, extra_env=extra_env)
-                elapsed = int(time.monotonic() - t0)
-                logger.info(
-                    "Task [%d] round %d/%d completed in %ds | exit_code=%d",
-                    task.id,
-                    round_index,
-                    rounds,
-                    elapsed,
-                    code,
-                )
-                if code != 0:
-                    failed = True
-                    has_failure = True
-                    break
+            failed = _run_task_batch(
+                task=task,
+                parent=parent,
+                tool=tool,
+                rounds=rounds,
+                logger=logger,
+                extra_env=extra_env,
+                attempt_mode=attempt_mode,
+                glm_plan=glm_plan,
+                log_dir=log_dir,
+            )
         if failed:
-            task.status = "failed"
+            has_failure = True
+            task.transition_to("failed")
             task.completed_at = None
             save_task(task)
             logger.info('Task [%d] "%s" failed', task.id, task.slug)
@@ -373,5 +372,5 @@ def run_tasks(
         task.complete()
         save_task(task)
         logger.info('Task [%d] "%s" completed', task.id, task.slug)
-        _auto_complete_parent(task, logger)
+        auto_complete_parent_of(all_tasks(), task, logger=logger)
     return 1 if has_failure else 0

@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from fa.core.logview import _LIVE_VIEWER_TOOLS, TaskViewer, ViewerController
-from fa.core.tty import _main_session_cbreak, _read_main_session_key
+from fa.core.tty import _read_main_session_key, cbreak_session
 from fa.gestate.prompting import _build_tool_cmd_for_prompt
 
 
@@ -77,7 +77,7 @@ def _run_tool_with_optional_viewer(
             if viewer_controller.is_open():
                 time.sleep(0.2)
                 continue
-            with _main_session_cbreak():
+            with cbreak_session():
                 key = _read_main_session_key()
             if key == "\x0c":
                 viewer_controller.open()
