@@ -12,7 +12,7 @@ from fa.core.config import (
     tool_extra_env,
 )
 from fa.core.git import changed_files, is_git_repo
-from fa.core.quota import check_glm_quota
+from fa.core.quota import check_glm_quota_and_wait
 from fa.core.subprocess import run_tool
 from fa.policy.model import Policy
 from fa.policy.storage import load_policy
@@ -97,7 +97,7 @@ def run_policy(
     for round_index in range(1, rounds + 1):
         date = datetime.now().strftime("%Y-%m-%d")
         time_str = datetime.now().strftime("%H%M%S")
-        if glm_plan and not check_glm_quota(logger):
+        if glm_plan and not check_glm_quota_and_wait(logger):
             logger.error(
                 'Policy "%s" round %d/%d skipped - GLM quota check failed',
                 policy_id,

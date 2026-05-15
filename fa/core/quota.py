@@ -6,6 +6,12 @@ import time
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
+
+
+class QuotaResult(NamedTuple):
+    proceed: bool
+    wait_until_ts: int | None
 
 
 def _load_settings() -> dict | None:
@@ -19,12 +25,12 @@ def _load_settings() -> dict | None:
 THRESHOLD = 70
 
 
-def check_glm_quota(logger: logging.Logger) -> bool:
+def check_glm_quota(logger: logging.Logger) -> QuotaResult:
     settings = _load_settings()
     token = (settings or {}).get("env", {}).get("ANTHROPIC_AUTH_TOKEN")
     if not token:
         logger.debug("GLM quota: no token found, skipping check")
-        return True
+        return QuotaResult(True, None)
     req = urllib.request.Request(
         "https://open.bigmodel.cn/api/monitor/usage/quota/limit"
     )
@@ -35,7 +41,7 @@ def check_glm_quota(logger: logging.Logger) -> bool:
             data = json.load(response)
     except Exception as exc:
         logger.warning("GLM quota: check failed (%s) - proceeding", exc)
-        return True
+        return QuotaResult(True, None)
     for item in data.get("data", {}).get("limits", []):
         if item.get("type") != "TOKENS_LIMIT":
             continue
@@ -46,7 +52,7 @@ def check_glm_quota(logger: logging.Logger) -> bool:
                 percentage,
                 THRESHOLD,
             )
-            return True
+            return QuotaResult(True, None)
         next_reset = item.get("nextResetTime")
         if next_reset is None:
             logger.warning(
@@ -54,18 +60,29 @@ def check_glm_quota(logger: logging.Logger) -> bool:
                 percentage,
                 THRESHOLD,
             )
-            return False
+            return QuotaResult(False, None)
         wait_until_ts = int(next_reset / 1000) + 1800
         wait_until_dt = datetime.fromtimestamp(wait_until_ts)
         logger.warning(
-            "GLM quota: %.0f%% (threshold: %d%%) - waiting until %s (+30min buffer)",
+            "GLM quota: %.0f%% (threshold: %d%%) - exceeded, should wait until %s (+30min buffer)",
             percentage,
             THRESHOLD,
             wait_until_dt.strftime("%Y-%m-%d %H:%M:%S"),
         )
-        while time.time() < wait_until_ts:
-            time.sleep(10)
-        logger.debug("GLM quota: wait complete - proceeding")
-        return True
+        return QuotaResult(False, wait_until_ts)
     logger.debug("GLM quota: no TOKENS_LIMIT entry found - proceeding")
-    return True
+    return QuotaResult(True, None)
+
+
+def wait_for_quota_reset(wait_until_ts: int, logger: logging.Logger) -> None:
+    while time.time() < wait_until_ts:
+        time.sleep(10)
+    logger.debug("GLM quota: wait complete - proceeding")
+
+
+def check_glm_quota_and_wait(logger: logging.Logger) -> bool:
+    result = check_glm_quota(logger)
+    if result.wait_until_ts is not None:
+        wait_for_quota_reset(result.wait_until_ts, logger)
+        return True
+    return result.proceed

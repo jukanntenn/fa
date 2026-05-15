@@ -21,6 +21,11 @@ from fa.task.storage import (
     save_task,
 )
 
+
+class CandidateValidationError(Exception):
+    pass
+
+
 task_app = typer.Typer(help="Task commands")
 
 
@@ -160,6 +165,42 @@ def archive(id_range: Annotated[str | None, typer.Argument()] = None) -> None:
         raise typer.Exit(code=1)
 
 
+def _select_runnable_candidates(
+    tasks: dict[int, Task],
+    candidate_ids: list[int],
+    *,
+    force: bool,
+    attempt: bool,
+    strict: bool = False,
+) -> list[int]:
+    if force:
+        return [cid for cid in candidate_ids if tasks[cid].status != "completed"]
+
+    if attempt:
+        return [
+            cid
+            for cid in candidate_ids
+            if tasks[cid].status in {"approved", "failed"}
+            and list(tasks[cid].path.glob("feedback-*.md"))
+        ]
+
+    if strict:
+        not_runnable = [
+            cid
+            for cid in candidate_ids
+            if tasks[cid].status not in {"approved", "failed"}
+        ]
+        if not_runnable:
+            raise CandidateValidationError(
+                "task(s) "
+                + ",".join(str(n) for n in not_runnable)
+                + " are not approved/failed"
+            )
+        return list(candidate_ids)
+
+    return [cid for cid in candidate_ids if tasks[cid].status in {"approved", "failed"}]
+
+
 @task_app.command("run")
 def run(
     ids: str | None = typer.Option(None, "--ids"),
@@ -198,45 +239,16 @@ def run(
             )
             raise typer.Exit(code=1)
         candidates = resolve_to_leaves(raw_ids, tasks)
-        if force:
-            # EC7: --force skips completed children, doesn't re-run them
-            candidates = [cid for cid in candidates if tasks[cid].status != "completed"]
-        elif attempt:
-            # EC5: --attempt --ids filters by feedback files
-            candidates = [
-                cid
-                for cid in candidates
-                if tasks[cid].status in {"approved", "failed"}
-                and list(tasks[cid].path.glob("feedback-*.md"))
-            ]
-        else:
-            not_runnable = [
-                cid
-                for cid in candidates
-                if tasks[cid].status not in {"approved", "failed"}
-            ]
-            if not_runnable:
-                typer.echo(
-                    "Error: task(s) "
-                    + ",".join(str(n) for n in not_runnable)
-                    + " are not approved/failed. Use --force to override.",
-                    err=True,
-                )
-                raise typer.Exit(code=1)
-    elif attempt:
-        leaf_ids = resolve_to_leaves(sorted(tasks.keys()), tasks)
-        candidates = [
-            tid
-            for tid in leaf_ids
-            if tid in tasks
-            and tasks[tid].status in {"approved", "failed"}
-            and list(tasks[tid].path.glob("feedback-*.md"))
-        ]
     else:
-        leaf_ids = resolve_to_leaves(sorted(tasks.keys()), tasks)
-        candidates = [
-            tid for tid in leaf_ids if tasks[tid].status in {"approved", "failed"}
-        ]
+        candidates = resolve_to_leaves(sorted(tasks.keys()), tasks)
+
+    try:
+        candidates = _select_runnable_candidates(
+            tasks, candidates, force=force, attempt=attempt, strict=(ids is not None)
+        )
+    except CandidateValidationError as exc:
+        typer.echo(f"Error: {exc}. Use --force to override.", err=True)
+        raise typer.Exit(code=1) from exc
 
     if not candidates:
         logger.info("No tasks to run.")

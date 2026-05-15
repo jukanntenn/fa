@@ -88,11 +88,9 @@ def build_tool_cmd(tool: str, prompt: str, *, agent: str | None = None) -> list[
         if arg_style == "$":
             agent_prompt = f"${agent} {prompt}"
             return [part.format(prompt=agent_prompt) for part in template]
-        cmd: list[str] = []
-        for piece in template:
-            if piece == "{prompt}":
-                cmd.extend([arg_style, agent])
-            cmd.append(piece.format(prompt=prompt))
+        cmd = [part.format(prompt=prompt) for part in template]
+        idx = template.index("{prompt}")
+        cmd[idx:idx] = [arg_style, agent]
         return cmd
     return [part.format(prompt=prompt) for part in template]
 

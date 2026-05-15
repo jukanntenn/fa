@@ -175,15 +175,5 @@ def auto_complete_parent_of(
 
 
 def auto_complete_all_eligible_parents(tasks: dict[int, Task]) -> None:
-    for t in tasks.values():
-        if t.parent_id is not None:
-            continue
-        children = [c for c in tasks.values() if c.parent_id == t.id]
-        if not children:
-            continue
-        if all(c.status == "completed" for c in children) and t.status not in {
-            "completed",
-            "draft",
-        }:
-            t.complete()
-            save_task(t)
+    for task in tasks.values():
+        auto_complete_parent_of(tasks, task)

@@ -16,7 +16,7 @@ from fa.core.config import (
     tool_extra_env,
 )
 from fa.core.logview import _LIVE_VIEWER_TOOLS, TaskViewer, ViewerController
-from fa.core.quota import check_glm_quota
+from fa.core.quota import check_glm_quota_and_wait
 from fa.core.subprocess import run_tool
 from fa.core.tty import _read_main_session_key, cbreak_session
 from fa.task.model import Task
@@ -83,7 +83,7 @@ def _should_run_round(
 ) -> bool:
     if not glm_plan:
         return True
-    if check_glm_quota(logger):
+    if check_glm_quota_and_wait(logger):
         return True
     logger.error(
         "Task [%d] round %d/%d skipped - GLM quota check failed",

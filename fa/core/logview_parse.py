@@ -36,13 +36,13 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
-def _update_sgr_depth(params: str, depth: list[int]) -> None:
+def _update_sgr_depth(params: str, depth: int) -> int:
     codes = params.split(";") if params else ["0"]
     i = 0
     while i < len(codes):
         code = codes[i] or "0"
         if code == "0":
-            depth[0] = 0
+            depth = 0
         elif code in {
             "22",
             "23",
@@ -54,16 +54,17 @@ def _update_sgr_depth(params: str, depth: list[int]) -> None:
             "39",
             "49",
         }:
-            depth[0] = max(0, depth[0] - 1)
+            depth = max(0, depth - 1)
         elif code in {"38", "48"}:
             if i + 1 < len(codes) and codes[i + 1] == "5":
                 i += 2
             elif i + 1 < len(codes) and codes[i + 1] == "2":
                 i += 4
-            depth[0] += 1
+            depth += 1
         else:
-            depth[0] += 1
+            depth += 1
         i += 1
+    return depth
 
 
 def _truncate_to_visible(line: str, max_cols: int) -> str:
@@ -72,7 +73,7 @@ def _truncate_to_visible(line: str, max_cols: int) -> str:
     result: list[str] = []
     visible = 0
     i = 0
-    sgr_depth = [0]
+    sgr_depth = 0
     while i < len(line):
         if visible >= max_cols:
             break
@@ -86,16 +87,21 @@ def _truncate_to_visible(line: str, max_cols: int) -> str:
             seq = line[i : j + 1]
             result.append(seq)
             if seq.endswith("m"):
-                _update_sgr_depth(seq[2:-1], sgr_depth)
+                sgr_depth = _update_sgr_depth(seq[2:-1], sgr_depth)
             i = j + 1
             continue
         result.append(ch)
         visible += 1
         i += 1
     text = "".join(result)
-    if sgr_depth[0]:
+    if sgr_depth:
         text += _RESET
     return text
+
+
+def _reset_exec_state(state: dict[str, str]) -> None:
+    state.pop("exec_command_seen", None)
+    state.pop("exec_output_seen", None)
 
 
 def parse_jsonl_line(line: str) -> str | None:
@@ -135,29 +141,37 @@ def _format_tool_result(item: dict) -> str:
     return f"{_DIM}[tool result]{_RESET}\n{_truncate(str(content), 2000, preserve_newlines=True)}"
 
 
+def _format_content_item(item: dict) -> str | None:
+    item_type = item.get("type")
+    if item_type == "text":
+        text = item.get("text", "")
+        if text.strip():
+            return _truncate(text, 4000, preserve_newlines=True)
+        return None
+    if item_type == "tool_use":
+        name = item.get("name", "unknown")
+        inp = item.get("input", {})
+        summary = _tool_input_summary(name, inp)
+        return f"{_BOLD}{_CYAN}[tool: {name}]{_RESET} {summary}"
+    if item_type == "thinking":
+        thinking = item.get("thinking", "")
+        if thinking.strip():
+            return f"{_DIM}[thinking...] {_truncate(thinking, 100)}{_RESET}"
+        return None
+    if item_type == "tool_result":
+        return _format_tool_result(item)
+    return None
+
+
 def _format_assistant(obj: dict) -> str | None:
-    message = obj.get("message", {})
-    contents = message.get("content", [])
+    contents = obj.get("message", {}).get("content", [])
     if not contents:
         return None
     parts: list[str] = []
     for item in contents:
-        item_type = item.get("type")
-        if item_type == "text":
-            text = item.get("text", "")
-            if text.strip():
-                parts.append(_truncate(text, 4000, preserve_newlines=True))
-        elif item_type == "tool_use":
-            name = item.get("name", "unknown")
-            inp = item.get("input", {})
-            summary = _tool_input_summary(name, inp)
-            parts.append(f"{_BOLD}{_CYAN}[tool: {name}]{_RESET} {summary}")
-        elif item_type == "thinking":
-            thinking = item.get("thinking", "")
-            if thinking.strip():
-                parts.append(f"{_DIM}[thinking...] {_truncate(thinking, 100)}{_RESET}")
-        elif item_type == "tool_result":
-            parts.append(_format_tool_result(item))
+        formatted = _format_content_item(item)
+        if formatted is not None:
+            parts.append(formatted)
     return "\n".join(parts) if parts else None
 
 
@@ -195,24 +209,20 @@ def parse_codex_line(line: str, state: dict[str, str] | None = None) -> str | No
         state = {}
     if stripped == "user":
         state["section"] = "user"
-        state.pop("exec_command_seen", None)
-        state.pop("exec_output_seen", None)
+        _reset_exec_state(state)
         return None
     if stripped == "codex":
         state["section"] = "codex"
         if state.get("exec_output_seen") == "1":
-            state.pop("exec_command_seen", None)
-            state.pop("exec_output_seen", None)
+            _reset_exec_state(state)
         return None
     if stripped == "exec":
         state["section"] = "exec"
-        state.pop("exec_command_seen", None)
-        state.pop("exec_output_seen", None)
+        _reset_exec_state(state)
         return None
     if stripped.startswith("OpenAI Codex "):
         state["section"] = "metadata"
-        state.pop("exec_command_seen", None)
-        state.pop("exec_output_seen", None)
+        _reset_exec_state(state)
         if state.get("codex_header_seen") == "1":
             return None
         state["codex_header_seen"] = "1"

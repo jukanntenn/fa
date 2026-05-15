@@ -10,7 +10,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from fa.core.project import ensure_fa_structure, find_project_root
-from fa.core.quota import _load_settings, check_glm_quota
+from fa.core.quota import (
+    QuotaResult,
+    _load_settings,
+    check_glm_quota,
+    check_glm_quota_and_wait,
+)
 from fa.task.model import InvalidTransition, Task
 
 
@@ -202,7 +207,7 @@ def test_load_settings_returns_parsed_settings_when_json_valid() -> None:
 def test_check_glm_quota_skips_when_token_missing() -> None:
     logger = logging.getLogger("test")
     with patch("fa.core.quota._load_settings", return_value=None):
-        assert check_glm_quota(logger)
+        assert check_glm_quota(logger).proceed
 
 
 def test_check_glm_quota_proceeds_when_quota_check_request_fails() -> None:
@@ -214,7 +219,7 @@ def test_check_glm_quota_proceeds_when_quota_check_request_fails() -> None:
         ),
         patch("fa.core.quota.urllib.request.urlopen", side_effect=RuntimeError("boom")),
     ):
-        assert check_glm_quota(logger)
+        assert check_glm_quota(logger).proceed
 
 
 def test_check_glm_quota_proceeds_when_tokens_limit_is_below_threshold() -> None:
@@ -231,10 +236,10 @@ def test_check_glm_quota_proceeds_when_tokens_limit_is_below_threshold() -> None
         ),
         patch("fa.core.quota.urllib.request.urlopen", mocked_urlopen),
     ):
-        assert check_glm_quota(logger)
+        assert check_glm_quota(logger).proceed
 
 
-def test_check_glm_quota_proceeds_when_tokens_limit_has_no_reset_time() -> None:
+def test_check_glm_quota_and_wait_proceeds_when_reset_time_is_past() -> None:
     logger = logging.getLogger("test")
     payload = {
         "data": {
@@ -251,13 +256,12 @@ def test_check_glm_quota_proceeds_when_tokens_limit_has_no_reset_time() -> None:
             return_value={"env": {"ANTHROPIC_AUTH_TOKEN": "token"}},
         ),
         patch("fa.core.quota.urllib.request.urlopen", mocked_urlopen),
+        patch("fa.core.quota.wait_for_quota_reset"),
     ):
-        assert check_glm_quota(logger)
+        assert check_glm_quota_and_wait(logger)
 
 
-def test_check_glm_quota_waits_until_reset_with_buffer_when_threshold_exceeded() -> (
-    None
-):
+def test_check_glm_quota_returns_wait_ts_when_threshold_exceeded() -> None:
     logger = logging.getLogger("test")
     payload = {
         "data": {
@@ -280,12 +284,25 @@ def test_check_glm_quota_waits_until_reset_with_buffer_when_threshold_exceeded()
             return_value={"env": {"ANTHROPIC_AUTH_TOKEN": "token"}},
         ),
         patch("fa.core.quota.urllib.request.urlopen", mocked_urlopen),
-        patch("fa.core.quota.time.time", side_effect=[0, 5000]),
-        patch("fa.core.quota.time.sleep") as sleep_mock,
     ):
-        assert check_glm_quota(logger)
+        result = check_glm_quota(logger)
 
-    sleep_mock.assert_called_once_with(10)
+    expected_ts = int(1000 / 1000) + 1800
+    assert result == QuotaResult(False, expected_ts)
+
+
+def test_check_glm_quota_and_wait_waits_and_returns_true() -> None:
+    logger = logging.getLogger("test")
+    wait_ts = int(1000 / 1000) + 1800
+
+    with (
+        patch(
+            "fa.core.quota.check_glm_quota", return_value=QuotaResult(False, wait_ts)
+        ),
+        patch("fa.core.quota.wait_for_quota_reset") as wait_mock,
+    ):
+        assert check_glm_quota_and_wait(logger) is True
+        wait_mock.assert_called_once_with(wait_ts, logger)
 
 
 def test_check_glm_quota_proceeds_when_no_tokens_limit_entry_exists() -> None:
@@ -302,4 +319,4 @@ def test_check_glm_quota_proceeds_when_no_tokens_limit_entry_exists() -> None:
         ),
         patch("fa.core.quota.urllib.request.urlopen", mocked_urlopen),
     ):
-        assert check_glm_quota(logger)
+        assert check_glm_quota(logger).proceed

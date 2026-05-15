@@ -8,10 +8,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-
 from fa.core.logview import parse_codex_line, parse_jsonl_line
 from fa.core.logview_parse import (
     _RESET,
+    _format_content_item,
     _strip_ansi,
     _tool_input_summary,
     _truncate,
@@ -43,19 +43,19 @@ def test_strip_ansi_removes_sequences_without_surrounding_text() -> None:
 
 
 def test_update_sgr_depth_resets_counter() -> None:
-    depth = [0]
-    _update_sgr_depth("1;31", depth)
-    assert depth[0] == 2
-    _update_sgr_depth("0", depth)
-    assert depth[0] == 0
+    depth = 0
+    depth = _update_sgr_depth("1;31", depth)
+    assert depth == 2
+    depth = _update_sgr_depth("0", depth)
+    assert depth == 0
 
 
 def test_update_sgr_depth_increments_and_decrements() -> None:
-    depth = [0]
-    _update_sgr_depth("1;31", depth)
-    assert depth[0] == 2
-    _update_sgr_depth("22;39", depth)
-    assert depth[0] == 0
+    depth = 0
+    depth = _update_sgr_depth("1;31", depth)
+    assert depth == 2
+    depth = _update_sgr_depth("22;39", depth)
+    assert depth == 0
 
 
 def test_parse_jsonl_line_returns_raw_line_for_invalid_json() -> None:
@@ -353,3 +353,40 @@ def test_viewer_controller_open_reopens_after_viewer_exits() -> None:
         controller.wait_closed(timeout=1)
 
     assert run_viewer.call_count == 2
+
+
+def test_format_content_item_formats_text() -> None:
+    result = _format_content_item({"type": "text", "text": "hello"})
+    assert result == "hello"
+
+
+def test_format_content_item_skips_whitespace_text() -> None:
+    assert _format_content_item({"type": "text", "text": "  \n  "}) is None
+
+
+def test_format_content_item_formats_tool_use() -> None:
+    result = _format_content_item(
+        {"type": "tool_use", "name": "Read", "input": {"file_path": "a.txt"}}
+    )
+    assert "[tool: Read]" in result
+    assert "a.txt" in result
+
+
+def test_format_content_item_formats_thinking() -> None:
+    result = _format_content_item({"type": "thinking", "thinking": "pondering..."})
+    assert "[thinking...]" in result
+    assert "pondering" in result
+
+
+def test_format_content_item_skips_empty_thinking() -> None:
+    assert _format_content_item({"type": "thinking", "thinking": "  "}) is None
+
+
+def test_format_content_item_formats_tool_result() -> None:
+    result = _format_content_item({"type": "tool_result", "content": "output text"})
+    assert "[tool result]" in result
+    assert "output text" in result
+
+
+def test_format_content_item_returns_none_for_unknown_type() -> None:
+    assert _format_content_item({"type": "image"}) is None
