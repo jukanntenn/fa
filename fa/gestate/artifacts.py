@@ -48,8 +48,6 @@ def _format_artifact_diff(before: ArtifactSnapshot, after: ArtifactSnapshot) -> 
         ]
         if diff_lines:
             chunks.extend(diff_lines)
-        else:
-            chunks.extend([f"--- before/{relative}\n", f"+++ after/{relative}\n"])
     return "".join(chunks)
 
 

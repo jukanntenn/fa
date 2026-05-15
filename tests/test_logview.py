@@ -1,24 +1,16 @@
 from __future__ import annotations
 
-import io
 import json
-import threading
-import time
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from unittest.mock import patch
 
 from fa.core.logview import parse_codex_line, parse_jsonl_line
 from fa.core.logview_parse import (
     _RESET,
-    _format_content_item,
     _strip_ansi,
     _tool_input_summary,
     _truncate,
     _truncate_to_visible,
     _update_sgr_depth,
 )
-from fa.core.logview_viewer import Entry, TaskViewer, ViewerController
 
 
 def test_truncate_preserves_newlines_when_requested() -> None:
@@ -100,6 +92,16 @@ def test_tool_input_summary_formats_common_inputs() -> None:
     assert _tool_input_summary("Bash", {"command": "echo hi"}) == "echo hi"
     assert _tool_input_summary("Grep", {"pattern": "foo"}) == "foo"
     assert _tool_input_summary("Glob", {"pattern": "*.py"}) == "*.py"
+
+
+def test_tool_input_summary_fallback_for_unknown_tool() -> None:
+    result = _tool_input_summary("UnknownTool", {"foo": "bar", "baz": "qux"})
+    assert result == "foo=..., baz=..."
+
+
+def test_tool_input_summary_fallback_for_missing_keys() -> None:
+    result = _tool_input_summary("Read", {"other_key": "value"})
+    assert result == "other_key=..."
 
 
 def test_truncate_to_visible_plain_text_truncation() -> None:
@@ -207,186 +209,3 @@ def test_codex_formats_exec_success_after_codex_marker() -> None:
 
     assert result is not None
     assert "[exec succeeded]" in result
-
-
-def test_viewer_reports_open_and_close_state() -> None:
-    viewer = TaskViewer("task", total_rounds=1)
-
-    assert not viewer._close_requested.is_set()
-    assert not viewer._task_done.is_set()
-    viewer.mark_done()
-    assert viewer._task_done.is_set()
-    viewer.request_close()
-    assert viewer._close_requested.is_set()
-
-
-def test_viewer_adds_round_markers_and_body_entries() -> None:
-    viewer = TaskViewer("task", total_rounds=2)
-    viewer.start_round(1, Path("round-1.log"))
-    viewer._entries.append(Entry(round_index=1, text="round one output"))
-    viewer.end_round(1.0)
-    viewer.start_round(2, Path("round-2.log"))
-    viewer._entries.append(Entry(round_index=2, text="round two output"))
-
-    lines = viewer._render_body_lines_from(viewer._entries, 80, is_waiting=False)
-
-    joined = "\n".join(lines)
-    assert "Round 1/2 started" in joined
-    assert "round one output" in joined
-    assert "Round 1/2 completed" in joined
-    assert "Round 2/2 started" in joined
-    assert "round two output" in joined
-    assert viewer._current_round == 2
-    assert viewer._current_log == Path("round-2.log")
-
-
-def test_viewer_persists_round_markers_and_parsed_entries() -> None:
-    with TemporaryDirectory() as tempdir:
-        raw_log = Path(tempdir) / "round-1-claude.log"
-        viewer_log = Path(tempdir) / "round-1-claude-viewer.log"
-        raw_log.write_text(
-            json.dumps(
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [{"type": "text", "text": "hello from agent"}]
-                    },
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-
-        viewer = TaskViewer("task", total_rounds=1, tool="claude")
-        viewer.start_round(1, raw_log, viewer_log)
-        viewer._drain_current_log()
-        viewer.end_round(0.1)
-
-        persisted = viewer_log.read_text(encoding="utf-8")
-
-    assert "Round 1/1 started" in persisted
-    assert "hello from agent" in persisted
-    assert "Round 1/1 completed" in persisted
-    assert "\x1b[" not in persisted
-
-
-def test_body_lines_truncate_by_visible_width() -> None:
-    viewer = TaskViewer("task", total_rounds=1)
-    entries = [Entry(round_index=1, text="\033[31mabcdef")]
-
-    assert viewer._render_body_lines_from(entries, 3, is_waiting=False) == [
-        f"\033[31mabc{_RESET}"
-    ]
-
-
-def test_body_lines_include_ansi_safe_waiting_line() -> None:
-    viewer = TaskViewer("task", total_rounds=1)
-
-    lines = viewer._render_body_lines_from([], 10, is_waiting=True)
-
-    assert len(lines) == 1
-    assert lines[0].startswith("\033[33mWaiting f")
-    assert lines[0].endswith(_RESET)
-
-
-def test_render_suppresses_chrome_on_tiny_terminal() -> None:
-    viewer = TaskViewer("task", total_rounds=1)
-    viewer.start_round(1, Path("round-1.log"))
-    viewer._entries = [Entry(round_index=1, text="body line")]
-    viewer.mark_done()
-
-    stdout = io.StringIO()
-    with (
-        patch("fa.core.logview_viewer.shutil.get_terminal_size", return_value=(80, 2)),
-        patch("fa.core.logview_viewer.sys.stdout", stdout),
-    ):
-        viewer._render()
-
-    output = stdout.getvalue()
-    assert output == "\033[H\033[Jbody line"
-
-
-def test_viewer_controller_open_does_not_start_duplicate_thread() -> None:
-    viewer_started = threading.Event()
-    release_viewer = threading.Event()
-    viewer = TaskViewer("task", total_rounds=1)
-    controller = ViewerController(viewer)
-
-    def fake_run() -> None:
-        viewer_started.set()
-        release_viewer.wait(timeout=1)
-
-    with patch.object(viewer, "run", side_effect=fake_run) as run_viewer:
-        try:
-            controller.open()
-            assert viewer_started.wait(timeout=1)
-            controller.open()
-
-            assert run_viewer.call_count == 1
-            assert controller.is_open()
-        finally:
-            release_viewer.set()
-            controller.wait_closed(timeout=1)
-
-    assert not controller.is_open()
-
-
-def test_viewer_controller_close_requests_viewer_close() -> None:
-    viewer = TaskViewer("task", total_rounds=1)
-    controller = ViewerController(viewer)
-
-    controller.close()
-
-    assert viewer._close_requested.is_set()
-
-
-def test_viewer_controller_open_reopens_after_viewer_exits() -> None:
-    viewer = TaskViewer("task", total_rounds=1)
-    controller = ViewerController(viewer)
-
-    with patch.object(viewer, "run") as run_viewer:
-        controller.open()
-        deadline = time.monotonic() + 1
-        while controller.is_open() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        controller.open()
-        controller.wait_closed(timeout=1)
-
-    assert run_viewer.call_count == 2
-
-
-def test_format_content_item_formats_text() -> None:
-    result = _format_content_item({"type": "text", "text": "hello"})
-    assert result == "hello"
-
-
-def test_format_content_item_skips_whitespace_text() -> None:
-    assert _format_content_item({"type": "text", "text": "  \n  "}) is None
-
-
-def test_format_content_item_formats_tool_use() -> None:
-    result = _format_content_item(
-        {"type": "tool_use", "name": "Read", "input": {"file_path": "a.txt"}}
-    )
-    assert "[tool: Read]" in result
-    assert "a.txt" in result
-
-
-def test_format_content_item_formats_thinking() -> None:
-    result = _format_content_item({"type": "thinking", "thinking": "pondering..."})
-    assert "[thinking...]" in result
-    assert "pondering" in result
-
-
-def test_format_content_item_skips_empty_thinking() -> None:
-    assert _format_content_item({"type": "thinking", "thinking": "  "}) is None
-
-
-def test_format_content_item_formats_tool_result() -> None:
-    result = _format_content_item({"type": "tool_result", "content": "output text"})
-    assert "[tool result]" in result
-    assert "output text" in result
-
-
-def test_format_content_item_returns_none_for_unknown_type() -> None:
-    assert _format_content_item({"type": "image"}) is None

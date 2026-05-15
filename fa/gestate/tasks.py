@@ -144,14 +144,8 @@ def _validate_task(task: Task) -> list[str]:
         issues.append(f"task {task.id} status is '{task.status}', expected 'draft'")
     all_t = all_tasks()
     has_children = bool(find_children(task.id))
-
-    need_spec = True
-    need_plan = True
-
-    if has_children:
-        need_plan = False
-    elif task.parent_id is not None and task.parent_id in all_t:
-        need_spec = False
+    need_spec = has_children or task.parent_id is None or task.parent_id not in all_t
+    need_plan = not has_children
 
     if need_spec and not (task.path / "spec.md").exists():
         issues.append(f"task {task.id} missing spec.md")

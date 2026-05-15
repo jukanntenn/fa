@@ -241,7 +241,7 @@ class TaskViewer:
             _truncate_to_visible(footer_text, cols) if footer_text is not None else None
         )
         show_header = rows >= 3
-        show_footer = rows >= 3 and footer is not None
+        show_footer = show_header and footer is not None
         reserved = (1 if show_header else 0) + (1 if show_footer else 0)
         content_height = max(1, rows - reserved)
 
@@ -286,10 +286,7 @@ class TaskViewer:
         lines: list[str] = []
         for entry in entries:
             for sub_line in entry.text.split("\n"):
-                if not sub_line:
-                    lines.append("")
-                else:
-                    lines.append(_truncate_to_visible(sub_line, cols))
+                lines.append(_truncate_to_visible(sub_line, cols))
         if is_waiting:
             lines.append(waiting)
         return lines
@@ -302,12 +299,10 @@ class TaskViewer:
         return None
 
     def _render_header_with(self, current_round: int) -> str:
-        if current_round > 0:
-            return (
-                f'{_BOLD}--- Task "{self.slug}" Round '
-                f"{current_round}/{self.total_rounds} (press 'q' to return) ---{_RESET}"
-            )
-        return f"{_BOLD}--- Task \"{self.slug}\" (press 'q' to return) ---{_RESET}"
+        round_info = (
+            f" Round {current_round}/{self.total_rounds}" if current_round > 0 else ""
+        )
+        return f"{_BOLD}--- Task \"{self.slug}\"{round_info} (press 'q' to return) ---{_RESET}"
 
 
 class ViewerController:

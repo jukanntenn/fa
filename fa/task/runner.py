@@ -145,7 +145,6 @@ def _run_task_interactive(
                         text=True,
                         env=env,
                     )
-                    logger.info("Agent running. Press Ctrl+L to open the log viewer.")
                     proc.wait()
                     code = int(proc.returncode)
             except OSError:
@@ -175,9 +174,7 @@ def _run_task_interactive(
         if open_viewer:
             viewer_controller.open()
         with cbreak_session():
-            while True:
-                if not worker.is_alive():
-                    break
+            while worker.is_alive():
                 if viewer_controller.is_open():
                     time.sleep(0.2)
                     continue

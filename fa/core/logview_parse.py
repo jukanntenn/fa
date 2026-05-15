@@ -145,9 +145,7 @@ def _format_content_item(item: dict) -> str | None:
     item_type = item.get("type")
     if item_type == "text":
         text = item.get("text", "")
-        if text.strip():
-            return _truncate(text, 4000, preserve_newlines=True)
-        return None
+        return _truncate(text, 4000, preserve_newlines=True) if text.strip() else None
     if item_type == "tool_use":
         name = item.get("name", "unknown")
         inp = item.get("input", {})
@@ -155,9 +153,11 @@ def _format_content_item(item: dict) -> str | None:
         return f"{_BOLD}{_CYAN}[tool: {name}]{_RESET} {summary}"
     if item_type == "thinking":
         thinking = item.get("thinking", "")
-        if thinking.strip():
-            return f"{_DIM}[thinking...] {_truncate(thinking, 100)}{_RESET}"
-        return None
+        return (
+            f"{_DIM}[thinking...] {_truncate(thinking, 100)}{_RESET}"
+            if thinking.strip()
+            else None
+        )
     if item_type == "tool_result":
         return _format_tool_result(item)
     return None
@@ -176,8 +176,7 @@ def _format_assistant(obj: dict) -> str | None:
 
 
 def _format_user(obj: dict) -> str | None:
-    message = obj.get("message", {})
-    contents = message.get("content", [])
+    contents = obj.get("message", {}).get("content", [])
     if not contents:
         return None
     parts: list[str] = []
@@ -191,9 +190,7 @@ def _format_result(obj: dict) -> str:
     subtype = obj.get("subtype", "unknown")
     duration_ms = obj.get("duration_ms")
     result_text = obj.get("result", "")
-    duration_str = ""
-    if duration_ms is not None:
-        duration_str = f" in {duration_ms / 1000:.1f}s"
+    duration_str = f" in {duration_ms / 1000:.1f}s" if duration_ms is not None else ""
     result = str(result_text).strip()
     if subtype == "success":
         return f"{_BOLD}{_GREEN}[completed{duration_str}]{_RESET}\n{result}"
@@ -276,18 +273,14 @@ def parse_codex_line(line: str, state: dict[str, str] | None = None) -> str | No
 
 
 def _tool_input_summary(name: str, inp: dict) -> str:
-    if name == "Read" and "file_path" in inp:
+    if name in {"Read", "Write"} and "file_path" in inp:
         return inp["file_path"]
     if name == "Edit" and "file_path" in inp:
         old = _truncate(inp.get("old_string", ""), 60)
         return f"{inp['file_path']}: {old}"
-    if name == "Write" and "file_path" in inp:
-        return inp["file_path"]
     if name == "Bash" and "command" in inp:
         return _truncate(inp["command"], 100)
-    if name == "Grep" and "pattern" in inp:
-        return inp["pattern"]
-    if name == "Glob" and "pattern" in inp:
+    if name in {"Grep", "Glob"} and "pattern" in inp:
         return inp["pattern"]
     keys = list(inp.keys())[:3]
     return ", ".join(f"{k}=..." for k in keys)

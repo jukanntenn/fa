@@ -57,10 +57,8 @@ def build_task_prompt(task: Task, parent: Task | None, is_attempt_run: bool) -> 
 
     # Parent context counts
     if parent:
-        parent_memory_files = sorted(parent.path.glob("memory-*.md"))
-        parent_feedback_files = sorted(parent.path.glob("feedback-*.md"))
-        parent_memory_count = len(parent_memory_files)
-        parent_feedback_count = len(parent_feedback_files)
+        parent_memory_count = len(sorted(parent.path.glob("memory-*.md")))
+        parent_feedback_count = len(sorted(parent.path.glob("feedback-*.md")))
     else:
         parent_memory_count = 0
         parent_feedback_count = 0

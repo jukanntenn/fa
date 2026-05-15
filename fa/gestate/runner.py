@@ -48,21 +48,20 @@ def _run_tool_with_optional_viewer(
         viewer_log_path = log_path.with_name(f"{log_path.stem}-viewer.log")
         viewer.start_round(round_index, log_path, viewer_log_path)
         try:
-            try:
-                with log_path.open("w", encoding="utf-8") as log_file:
-                    proc = subprocess.Popen(
-                        cmd,
-                        stdin=subprocess.PIPE
-                        if prompt_stdin is not None
-                        else subprocess.DEVNULL,
-                        stdout=log_file,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                    )
-                    proc.communicate(input=prompt_stdin)
-                    return_code = int(proc.returncode)
-            except OSError:
-                return_code = None
+            with log_path.open("w", encoding="utf-8") as log_file:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE
+                    if prompt_stdin is not None
+                    else subprocess.DEVNULL,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                proc.communicate(input=prompt_stdin)
+                return_code = int(proc.returncode)
+        except OSError:
+            return_code = None
         finally:
             viewer.end_round(time.monotonic() - started_at)
 

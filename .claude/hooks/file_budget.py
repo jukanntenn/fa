@@ -55,8 +55,8 @@ def main():
             "- Refactor by logical organization: modularity, high cohesion, low coupling. "
             "Do NOT mechanically split files at arbitrary line boundaries.\n"
             "- If you are absolutely certain a file should be exempt from the budget, "
-            "add it to the \"overrides\" array in tools/entrix/file_budgets.json with "
-            "\"path\" and \"max_lines\" fields."
+            'add it to the "overrides" array in tools/entrix/file_budgets.json with '
+            '"path" and "max_lines" fields.'
         )
 
         print(json.dumps({"decision": "block", "reason": reason}))

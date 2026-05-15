@@ -143,14 +143,13 @@ def test_format_artifact_diff_returns_empty_for_both_empty() -> None:
     assert diff == ""
 
 
-def test_format_artifact_diff_emits_header_for_empty_content_change() -> None:
+def test_format_artifact_diff_returns_empty_for_empty_content_change() -> None:
     before: dict[str, str | None] = {"spec.md": None}
     after: dict[str, str | None] = {"spec.md": ""}
 
     diff = gestate_commands._format_artifact_diff(before, after)
 
-    assert "--- before/spec.md" in diff
-    assert "+++ after/spec.md" in diff
+    assert diff == ""
 
 
 def test_print_round_artifact_diff_prints_changes() -> None:

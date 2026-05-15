@@ -79,3 +79,11 @@ def test_transition_to_rejects_unknown_status() -> None:
 
     with pytest.raises(ValueError):
         task.transition_to("unknown")
+
+
+def test_complete_sets_completed_at_and_status(storage_root) -> None:
+    task = Task.new(1, "test", None, storage_root / "t1")
+    task.transition_to("approved")
+    task.complete()
+    assert task.status == "completed"
+    assert task.completed_at is not None

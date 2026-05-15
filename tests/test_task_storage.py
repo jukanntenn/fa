@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from fa.cli import app
 from fa.task import storage
+from fa.task.commands import _dedupe_archive_roots
 
 
 def test_child_ids_use_lowest_available_ids_after_parent(storage_root):
@@ -66,6 +67,16 @@ def test_all_tasks_still_excludes_archived_tasks(storage_root):
     assert task.id not in storage.all_tasks()
     assert storage.find_task(task.id) is None
     assert task.id in storage.all_task_ids(include_archive=True)
+
+
+def test_all_tasks_with_include_archive_returns_archived(storage_root):
+    task = storage.create_task("to-archive")
+    month_dir = storage.archive_dir() / "2026-05"
+    month_dir.mkdir(parents=True)
+    task.path.rename(month_dir / task.path.name)
+
+    assert task.id not in storage.all_tasks()
+    assert task.id in storage.all_tasks(include_archive=True)
 
 
 def test_top_level_id_skips_archived_ids(storage_root):
@@ -176,6 +187,14 @@ def test_parse_id_range_with_overlapping_ranges() -> None:
     assert storage.parse_id_range("1-3, 2-4") == [1, 2, 3, 4]
 
 
+def test_parse_id_range_with_single_element_range() -> None:
+    assert storage.parse_id_range("5-5") == [5]
+
+
+def test_parse_id_range_with_adjacent_ranges() -> None:
+    assert storage.parse_id_range("1-2, 3-4, 5-6") == [1, 2, 3, 4, 5, 6]
+
+
 def test_read_json_returns_none_for_missing_and_invalid_json() -> None:
     with TemporaryDirectory() as temp_dir:
         missing = Path(temp_dir) / "missing.json"
@@ -220,3 +239,69 @@ def test_archive_command_moves_task_and_updates_status() -> None:
             storage.save_task(task)
             result = runner.invoke(app, ["task", "archive", str(task_id)])
             assert result.exit_code == 0, result.output
+
+
+def test_dedupe_archive_roots_returns_all_when_no_overlap(storage_root):
+    from fa.task.model import Task
+
+    t1 = Task.new(1, "t1", None, storage_root / "t1")
+    t2 = Task.new(2, "t2", None, storage_root / "t2")
+    result = _dedupe_archive_roots([t1, t2])
+    assert result == [t1, t2]
+
+
+def test_dedupe_archive_roots_filters_child_when_parent_selected(storage_root):
+    from fa.task.model import Task
+
+    parent = Task.new(1, "parent", None, storage_root / "parent")
+    child = Task.new(2, "child", parent.id, storage_root / "parent" / "child")
+    result = _dedupe_archive_roots([parent, child])
+    assert result == [parent]
+    assert child not in result
+
+
+def test_dedupe_archive_roots_returns_sorted_by_id(storage_root):
+    from fa.task.model import Task
+
+    t3 = Task.new(3, "t3", None, storage_root / "t3")
+    t1 = Task.new(1, "t1", None, storage_root / "t1")
+    t2 = Task.new(2, "t2", None, storage_root / "t2")
+    result = _dedupe_archive_roots([t3, t1, t2])
+    assert [t.id for t in result] == [1, 2, 3]
+
+
+def test_save_task_persists_and_find_task_retrieves_it(storage_root):
+    task = storage.create_task("test-task")
+    task.status = "approved"
+    task.depends_on = [2, 3]
+    task.related_to = [4]
+    storage.save_task(task)
+
+    retrieved = storage.find_task(task.id)
+    assert retrieved is not None
+    assert retrieved.slug == "test-task"
+    assert retrieved.status == "approved"
+    assert retrieved.depends_on == [2, 3]
+    assert retrieved.related_to == [4]
+
+
+def test_save_task_overwrites_existing_task(storage_root):
+    task = storage.create_task("original-task")
+    storage.save_task(task)
+
+    task.status = "approved"
+    storage.save_task(task)
+
+    retrieved = storage.find_task(task.id)
+    assert retrieved is not None
+    assert retrieved.status == "approved"
+
+
+def test_create_task_returns_task_with_correct_properties(storage_root):
+    task = storage.create_task("my-task")
+    assert task.slug == "my-task"
+    assert task.status == "draft"
+    assert task.parent_id is None
+    assert task.depends_on == []
+    assert task.related_to == []
+    assert task.path.exists()

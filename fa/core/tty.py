@@ -10,11 +10,14 @@ def cbreak_session():
     if not sys.stdin.isatty():
         yield
         return
-    original_tty = None
     try:
         import termios as termios_module
         import tty as tty_module
-
+    except ImportError:
+        yield
+        return
+    original_tty = None
+    try:
         original_tty = termios_module.tcgetattr(sys.stdin.fileno())
         tty_module.setcbreak(sys.stdin.fileno())
     except Exception:

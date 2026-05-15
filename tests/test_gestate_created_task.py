@@ -35,6 +35,30 @@ def test_parse_task_reference_ignores_invalid_json() -> None:
     assert result is None
 
 
+def test_parse_task_reference_with_string_task_id_is_ignored() -> None:
+    text = '```json\n{ "task_id": "42", "task_path": "/tmp/project/.fa/tasks/42-demo" }\n```'
+
+    result = gestate_commands._parse_task_reference(text)
+
+    assert result is None
+
+
+def test_parse_task_reference_without_task_path_returns_none_path() -> None:
+    text = '```json\n{ "task_id": 42 }\n```'
+
+    result = gestate_commands._parse_task_reference(text)
+
+    assert result == (42, None)
+
+
+def test_parse_task_reference_ignores_non_dict_json() -> None:
+    text = "```json\n[1, 2, 3]\n```"
+
+    result = gestate_commands._parse_task_reference(text)
+
+    assert result is None
+
+
 def test_find_created_task_prefers_agent_returned_json_over_lowest_new_task() -> None:
     with TemporaryDirectory() as tempdir:
         with patch("fa.task.storage.find_project_root", return_value=Path(tempdir)):

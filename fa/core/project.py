@@ -14,12 +14,13 @@ from fa.core.config import (
 
 
 def find_project_root(start: Path | None = None) -> Path:
-    current = (start or Path.cwd()).resolve()
+    resolved = (start or Path.cwd()).resolve()
+    current = resolved
     while current != current.parent:
         if (current / FA_DIR_NAME).is_dir() or (current / ".git").is_dir():
             return current
         current = current.parent
-    return (start or Path.cwd()).resolve()
+    return resolved
 
 
 def ensure_fa_structure(project_root: Path) -> Path:

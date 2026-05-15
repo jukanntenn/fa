@@ -62,8 +62,7 @@ def _build_tool_cmd_for_prompt(
 ) -> tuple[list[str], str | None]:
     if not _tool_accepts_prompt_stdin(tool):
         if prompt_path is not None and (len(prompt) > 8000 or "\n" in prompt):
-            handoff = f"Read the full prompt from {prompt_path} and follow it exactly."
-            return build_tool_cmd(tool, handoff), None
+            prompt = f"Read the full prompt from {prompt_path} and follow it exactly."
         return build_tool_cmd(tool, prompt), None
     cmd = build_tool_cmd(tool, "")
     return [part for part in cmd if part != ""], prompt
