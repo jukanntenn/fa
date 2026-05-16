@@ -4,6 +4,7 @@ from fa.core.logview_parse import (
     _extract_text_content,
     _format_assistant,
     _format_content_item,
+    _format_message_contents,
     _format_result,
     _format_tool_result,
     _format_user,
@@ -397,4 +398,37 @@ def test_format_content_item_text():
 def test_format_content_item_input():
     item = {"type": "input", "text": "hello"}
     result = _format_content_item(item)
+    assert result is None
+
+
+def test_format_message_contents_with_formatter():
+    obj = {
+        "message": {
+            "content": [
+                {"type": "text", "text": "hello"},
+                {"type": "text", "text": "world"},
+            ]
+        }
+    }
+
+    def formatter(item):
+        return item.get("text")
+
+    result = _format_message_contents(obj, formatter)
+    assert result == "hello\nworld"
+
+
+def test_format_message_contents_empty_contents():
+    result = _format_message_contents({"message": {"content": []}}, lambda _: "x")
+    assert result is None
+
+
+def test_format_message_contents_all_none():
+    obj = {"message": {"content": [{"type": "text"}]}}
+    result = _format_message_contents(obj, lambda _: None)
+    assert result is None
+
+
+def test_format_message_contents_no_message_key():
+    result = _format_message_contents({}, lambda _: "x")
     assert result is None

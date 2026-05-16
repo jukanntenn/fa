@@ -77,6 +77,21 @@ TOOL_AGENT_ARG: dict[str, str] = {
 }
 
 
+def _render_cmd_template(template: list[str], prompt: str) -> list[str]:
+    return [part.format(prompt=prompt) for part in template]
+
+
+def _build_agent_cmd(
+    template: list[str], prompt: str, agent: str, arg_style: str
+) -> list[str]:
+    if arg_style == "$":
+        return _render_cmd_template(template, f"${agent} {prompt}")
+    cmd = _render_cmd_template(template, prompt)
+    idx = template.index("{prompt}")
+    cmd[idx:idx] = [arg_style, agent]
+    return cmd
+
+
 def build_tool_cmd(tool: str, prompt: str, *, agent: str | None = None) -> list[str]:
     if tool not in TOOL_COMMANDS:
         raise ValueError(
@@ -84,15 +99,10 @@ def build_tool_cmd(tool: str, prompt: str, *, agent: str | None = None) -> list[
         )
     template = TOOL_COMMANDS[tool]
     if agent is not None:
-        arg_style = TOOL_AGENT_ARG.get(tool, "--agent")
-        if arg_style == "$":
-            agent_prompt = f"${agent} {prompt}"
-            return [part.format(prompt=agent_prompt) for part in template]
-        cmd = [part.format(prompt=prompt) for part in template]
-        idx = template.index("{prompt}")
-        cmd[idx:idx] = [arg_style, agent]
-        return cmd
-    return [part.format(prompt=prompt) for part in template]
+        return _build_agent_cmd(
+            template, prompt, agent, TOOL_AGENT_ARG.get(tool, "--agent")
+        )
+    return _render_cmd_template(template, prompt)
 
 
 def tool_extra_env(tool: str) -> dict[str, str] | None:

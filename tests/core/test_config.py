@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from fa.core.config import _load_dotenv, _strip_quotes, build_tool_cmd
+from fa.core.config import _build_agent_cmd, _load_dotenv, _strip_quotes, build_tool_cmd
 
 
 def test_strips_double_quotes():
@@ -256,3 +256,37 @@ def test_tool_extra_env_returns_key_for_codex_with_env(tmp_path, monkeypatch):
     env_file.write_text("CODEX_API_KEY=sk-test123\n")
     result = tool_extra_env("codex")
     assert result == {"CODEX_API_KEY": "sk-test123"}
+
+
+# ─── _build_agent_cmd ──────────────────────────────────────────
+def test_build_agent_cmd_dollar_style():
+    codex_template = ["codex", "exec", "--full-auto", "{prompt}"]
+    result = _build_agent_cmd(codex_template, "hello world", "coder", "$")
+    assert result == ["codex", "exec", "--full-auto", "$coder hello world"]
+
+
+def test_build_agent_cmd_flag_style():
+    claude_template = [
+        "claude",
+        "-p",
+        "--dangerously-skip-permissions",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "{prompt}",
+    ]
+    result = _build_agent_cmd(claude_template, "hello", "reviewer", "--agent")
+    assert result[6:8] == ["--agent", "reviewer"]
+    assert result[8] == "hello"
+
+
+def test_build_tool_cmd_without_agent():
+    result = build_tool_cmd("claude", "hello")
+    assert "--agent" not in result
+    assert result[-1] == "hello"
+
+
+def test_build_tool_cmd_with_agent():
+    result = build_tool_cmd("claude", "hello", agent="coder")
+    assert "--agent" in result
+    assert "coder" in result

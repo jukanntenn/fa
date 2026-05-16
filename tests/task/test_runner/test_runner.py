@@ -4,6 +4,33 @@ from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
 from fa.task import runner, storage
+from fa.task.runner import _append_once
+
+
+def test_append_once_adds_new_id():
+    output = []
+    appended = set()
+    _append_once(output, appended, 5)
+    assert output == [5]
+    assert appended == {5}
+
+
+def test_append_once_skips_duplicate():
+    output = [5]
+    appended = {5}
+    _append_once(output, appended, 5)
+    assert output == [5]
+    assert appended == {5}
+
+
+def test_append_once_preserves_order():
+    output = []
+    appended = set()
+    _append_once(output, appended, 1)
+    _append_once(output, appended, 2)
+    _append_once(output, appended, 1)
+    _append_once(output, appended, 3)
+    assert output == [1, 2, 3]
 
 
 def _create_approved_task(tmp_path: Path):

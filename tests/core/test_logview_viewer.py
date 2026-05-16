@@ -9,7 +9,13 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from fa.core.logview_parse import _RESET
-from fa.core.logview_viewer import Entry, TaskViewer, ViewerController
+from fa.core.logview_viewer import (
+    Entry,
+    TaskViewer,
+    ViewerController,
+    _read_log_lines,
+    _split_complete_lines,
+)
 
 
 def test_viewer_reports_open_and_close_state() -> None:
@@ -174,34 +180,30 @@ def test_viewer_parse_log_line_codex_uses_codex_parser():
     assert result is None
 
 
-def test_viewer_read_log_lines_returns_empty_for_missing_file():
-    viewer = TaskViewer("task", total_rounds=1)
-    result = viewer._read_log_lines(Path("/nonexistent/file.log"), 0)
+def test_read_log_lines_returns_empty_for_missing_file():
+    result = _read_log_lines(Path("/nonexistent/file.log"), 0)
     assert result == []
 
 
-def test_viewer_read_log_lines_reads_from_offset(tmp_path: Path) -> None:
+def test_read_log_lines_reads_from_offset(tmp_path: Path) -> None:
     log = tmp_path / "test.log"
     log.write_text("line1\nline2\n", encoding="utf-8")
-    viewer = TaskViewer("task", total_rounds=1)
-    result = viewer._read_log_lines(log, 0)
+    result = _read_log_lines(log, 0)
     assert result == ["line1", "line2"]
 
 
-def test_viewer_read_log_lines_respects_offset(tmp_path: Path) -> None:
+def test_read_log_lines_respects_offset(tmp_path: Path) -> None:
     log = tmp_path / "test.log"
     log.write_text("line1\nline2\n", encoding="utf-8")
-    viewer = TaskViewer("task", total_rounds=1)
     offset = len("line1\n")
-    result = viewer._read_log_lines(log, offset)
+    result = _read_log_lines(log, offset)
     assert result == ["line2"]
 
 
-def test_viewer_read_log_lines_ignores_incomplete_trailing_line(tmp_path: Path) -> None:
+def test_read_log_lines_ignores_incomplete_trailing_line(tmp_path: Path) -> None:
     log = tmp_path / "test.log"
     log.write_text("line1\nline2", encoding="utf-8")
-    viewer = TaskViewer("task", total_rounds=1)
-    result = viewer._read_log_lines(log, 0)
+    result = _read_log_lines(log, 0)
     assert result == ["line1"]
 
 
@@ -336,20 +338,18 @@ def test_viewer_drain_uses_codex_parser(tmp_path: Path) -> None:
     assert "[codex]" in joined
 
 
-def test_viewer_read_log_lines_handles_os_error(tmp_path: Path) -> None:
+def test_read_log_lines_handles_os_error(tmp_path: Path) -> None:
     log = tmp_path / "test.log"
     log.write_text("data\n", encoding="utf-8")
-    viewer = TaskViewer("task", total_rounds=1)
     with patch.object(Path, "open", side_effect=OSError("permission denied")):
-        result = viewer._read_log_lines(log, 0)
+        result = _read_log_lines(log, 0)
     assert result == []
 
 
-def test_viewer_read_log_lines_returns_empty_for_empty_read(tmp_path: Path) -> None:
+def test_read_log_lines_returns_empty_for_empty_read(tmp_path: Path) -> None:
     log = tmp_path / "empty.log"
     log.write_text("", encoding="utf-8")
-    viewer = TaskViewer("task", total_rounds=1)
-    result = viewer._read_log_lines(log, 0)
+    result = _read_log_lines(log, 0)
     assert result == []
 
 
@@ -412,3 +412,47 @@ def test_viewer_drain_resets_offset_on_new_log(tmp_path: Path) -> None:
     joined = "\n".join(e.text for e in viewer._entries if "Round" not in e.text)
     assert "line1" in joined
     assert "line2" in joined
+
+
+def test_read_log_lines_single_complete_line(tmp_path: Path) -> None:
+    log = tmp_path / "one.log"
+    log.write_text("hello\n", encoding="utf-8")
+    assert _read_log_lines(log, 0) == ["hello"]
+
+
+def test_read_log_lines_multiple_complete_lines(tmp_path: Path) -> None:
+    log = tmp_path / "multi.log"
+    log.write_text("a\nb\nc\n", encoding="utf-8")
+    assert _read_log_lines(log, 0) == ["a", "b", "c"]
+
+
+def test_read_log_lines_blank_lines_stripped(tmp_path: Path) -> None:
+    log = tmp_path / "blanks.log"
+    log.write_text("a\n\nb\n", encoding="utf-8")
+    assert _read_log_lines(log, 0) == ["a", "b"]
+
+
+def test_read_log_lines_invalid_utf8_replacement(tmp_path: Path) -> None:
+    log = tmp_path / "bad.log"
+    log.write_bytes(b"valid\n\x80\n")
+    assert _read_log_lines(log, 0) == ["valid", "�"]
+
+
+def test_split_complete_lines_single_line():
+    assert _split_complete_lines("hello\n") == ["hello"]
+
+
+def test_split_complete_lines_multiple_lines():
+    assert _split_complete_lines("a\nb\nc\n") == ["a", "b", "c"]
+
+
+def test_split_complete_lines_drops_incomplete_trailing():
+    assert _split_complete_lines("a\nb") == ["a"]
+
+
+def test_split_complete_lines_filters_blanks():
+    assert _split_complete_lines("a\n\nb\n") == ["a", "b"]
+
+
+def test_split_complete_lines_empty_string():
+    assert _split_complete_lines("") == []

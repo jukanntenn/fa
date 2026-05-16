@@ -26,61 +26,65 @@ def task_template() -> tuple[Environment, str]:
     return template_env(package_template_dir()), PROMPT_TEMPLATE_NAME
 
 
+def _next_sequence_number(task: Task, prefix: str) -> int:
+    files = sorted(task.path.glob(f"{prefix}-*.md"))
+    return len(files) + 1
+
+
+def _numbered_paths(base: Path, prefix: str, up_to: int) -> list[str]:
+    return [relative_path(base / f"{prefix}-{i}.md") for i in range(1, up_to)]
+
+
 def infer_memory_sequence(task: Task) -> int:
-    memory_files = sorted(task.path.glob("memory-*.md"))
-    return len(memory_files) + 1
+    return _next_sequence_number(task, "memory")
 
 
 def infer_attempt(task: Task) -> int:
-    feedback_files = sorted(task.path.glob("feedback-*.md"))
-    return len(feedback_files) + 1
+    return _next_sequence_number(task, "feedback")
 
 
-def build_task_prompt(task: Task, parent: Task | None, is_attempt_run: bool) -> str:
+def _build_prompt_context(
+    task: Task, parent: Task | None, is_attempt_run: bool
+) -> dict[str, object]:
     memory_sequence = infer_memory_sequence(task)
     attempt = infer_attempt(task) if is_attempt_run else 1
 
-    # Memory files for current task (all existing memory files)
-    memory_files = [
-        relative_path(task.path / f"memory-{index}.md")
-        for index in range(1, memory_sequence)
-    ]
-
-    # Feedback files for current task (only in attempt mode)
-    feedback_files = [
-        relative_path(task.path / f"feedback-{index}.md") for index in range(1, attempt)
-    ]
-
-    # Split feedback into history and latest
-    history_feedback_files = feedback_files[:-1] if len(feedback_files) > 1 else []
+    memory_files = _numbered_paths(task.path, "memory", memory_sequence)
+    feedback_files = _numbered_paths(task.path, "feedback", attempt)
+    history_feedback_files = feedback_files[:-1]
     latest_feedback_file = feedback_files[-1] if feedback_files else None
 
-    # Parent context counts
     if parent:
-        parent_memory_count = len(sorted(parent.path.glob("memory-*.md")))
-        parent_feedback_count = len(sorted(parent.path.glob("feedback-*.md")))
+        parent_memory_count = infer_memory_sequence(parent) - 1
+        parent_feedback_count = infer_attempt(parent) - 1
     else:
         parent_memory_count = 0
         parent_feedback_count = 0
 
     memory_output_path = relative_path(task.path / f"memory-{memory_sequence}.md")
+
+    return {
+        "task": task.to_dict(),
+        "parent": parent.to_dict() if parent else None,
+        "task_file": relative_path(task.path / "plan.md"),
+        "parent_file": relative_path(parent.path / "spec.md") if parent else None,
+        "attempt": attempt,
+        "is_attempt_run": is_attempt_run,
+        "memory_files": memory_files,
+        "history_feedback_files": history_feedback_files,
+        "latest_feedback_file": latest_feedback_file,
+        "parent_memory_count": parent_memory_count,
+        "parent_feedback_count": parent_feedback_count,
+        "memory_output_path": memory_output_path,
+        "specs_dir": str(project_root() / "specs"),
+    }
+
+
+def build_task_prompt(task: Task, parent: Task | None, is_attempt_run: bool) -> str:
+    ctx = _build_prompt_context(task, parent, is_attempt_run)
     env, template_name = task_template()
     try:
         template = env.get_template(template_name)
     except TemplateNotFound as exc:
         raise FileNotFoundError("template not found") from exc
-    return template.render(
-        task=task.to_dict(),
-        parent=parent.to_dict() if parent else None,
-        task_file=relative_path(task.path / "plan.md"),
-        parent_file=relative_path(parent.path / "spec.md") if parent else None,
-        attempt=attempt,
-        is_attempt_run=is_attempt_run,
-        memory_files=memory_files,
-        history_feedback_files=history_feedback_files,
-        latest_feedback_file=latest_feedback_file,
-        parent_memory_count=parent_memory_count,
-        parent_feedback_count=parent_feedback_count,
-        memory_output_path=memory_output_path,
-        specs_dir=str(project_root() / "specs"),
-    )
+    return template.render(**ctx)

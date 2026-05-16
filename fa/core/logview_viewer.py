@@ -116,9 +116,12 @@ class TaskViewer:
                 return True
         return False
 
-    def _drain_current_log(self) -> None:
+    def drain(self) -> None:
         with self._drain_lock:
             self._drain_current_log_unlocked()
+
+    def _drain_current_log(self) -> None:
+        self.drain()
 
     def _parse_log_line(self, raw_line: str) -> str | None:
         if self.tool == "codex":
@@ -131,7 +134,7 @@ class TaskViewer:
         if self._current_log != self._last_log:
             self._last_log = self._current_log
             self._log_offset = 0
-        new_lines = self._read_log_lines(self._current_log, self._log_offset)
+        new_lines = _read_log_lines(self._current_log, self._log_offset)
         if not new_lines:
             return
         self._log_offset += sum(len(line.encode("utf-8")) + 1 for line in new_lines)
@@ -141,22 +144,6 @@ class TaskViewer:
                 self._append_entry(
                     Entry(round_index=self._current_round, text=formatted)
                 )
-
-    def _read_log_lines(self, path: Path, offset: int) -> list[str]:
-        if not path.exists():
-            return []
-        try:
-            with path.open("r", encoding="utf-8", errors="replace") as file:
-                file.seek(offset)
-                text = file.read()
-        except OSError:
-            return []
-        if not text:
-            return []
-        lines = text.split("\n")
-        if not text.endswith("\n"):
-            lines = lines[:-1]
-        return [line for line in lines if line.strip()]
 
     def _handle_input(self) -> None:
         if not sys.stdin.isatty():
@@ -303,6 +290,27 @@ class TaskViewer:
             f" Round {current_round}/{self.total_rounds}" if current_round > 0 else ""
         )
         return f"{_BOLD}--- Task \"{self.slug}\"{round_info} (press 'q' to return) ---{_RESET}"
+
+
+def _split_complete_lines(text: str) -> list[str]:
+    lines = text.split("\n")
+    if not text.endswith("\n"):
+        lines = lines[:-1]
+    return [line for line in lines if line.strip()]
+
+
+def _read_log_lines(path: Path, offset: int) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as file:
+            file.seek(offset)
+            text = file.read()
+    except OSError:
+        return []
+    if not text:
+        return []
+    return _split_complete_lines(text)
 
 
 class ViewerController:

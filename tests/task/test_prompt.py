@@ -103,6 +103,25 @@ def test_build_task_prompt_with_parent(tmp_path: Path) -> None:
     assert "child" in result
 
 
+def test_build_prompt_context_parent_counts(tmp_path: Path) -> None:
+    parent_path = tmp_path / "parent"
+    parent_path.mkdir()
+    for i in range(1, 4):
+        (parent_path / f"memory-{i}.md").write_text(f"mem {i}", encoding="utf-8")
+    for i in range(1, 3):
+        (parent_path / f"feedback-{i}.md").write_text(f"fb {i}", encoding="utf-8")
+    parent = Task.new(1, "parent", None, parent_path)
+
+    child_path = tmp_path / "child"
+    child_path.mkdir()
+    child = Task.new(2, "child", parent.id, child_path)
+
+    with patch.object(prompt, "relative_path", side_effect=lambda p: str(p)):
+        ctx = prompt._build_prompt_context(child, parent, is_attempt_run=False)
+    assert ctx["parent_memory_count"] == 3
+    assert ctx["parent_feedback_count"] == 2
+
+
 def test_template_env_returns_environment_with_strict_undefined(tmp_path: Path) -> None:
     from jinja2 import StrictUndefined
 
@@ -111,3 +130,29 @@ def test_template_env_returns_environment_with_strict_undefined(tmp_path: Path) 
     assert env.autoescape is False
     assert env.trim_blocks is True
     assert env.lstrip_blocks is True
+
+
+def test_numbered_paths(tmp_path: Path) -> None:
+    original = prompt.relative_path
+    prompt.relative_path = lambda p: str(p)
+    try:
+        result = prompt._numbered_paths(tmp_path, "memory", 4)
+    finally:
+        prompt.relative_path = original
+
+    assert len(result) == 3
+    assert all("memory-" in r for r in result)
+    assert result[0].endswith("memory-1.md")
+    assert result[1].endswith("memory-2.md")
+    assert result[2].endswith("memory-3.md")
+
+
+def test_numbered_paths_empty(tmp_path: Path) -> None:
+    original = prompt.relative_path
+    prompt.relative_path = lambda p: str(p)
+    try:
+        result = prompt._numbered_paths(tmp_path, "memory", 1)
+    finally:
+        prompt.relative_path = original
+
+    assert result == []

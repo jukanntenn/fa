@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +21,7 @@ app.add_typer(policy_app, name="policy")
 @dataclass
 class AppState:
     project_root: Path
-    logger: object
+    logger: logging.Logger
 
 
 root = find_project_root()

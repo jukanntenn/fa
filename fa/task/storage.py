@@ -72,8 +72,12 @@ def find_task(task_id: int) -> Task | None:
     return all_tasks().get(task_id)
 
 
+def _children_of(task_id: int, tasks: dict[int, Task]) -> list[Task]:
+    return [t for t in tasks.values() if t.parent_id == task_id]
+
+
 def find_children(parent_id: int) -> list[Task]:
-    return [t for t in all_tasks().values() if t.parent_id == parent_id]
+    return _children_of(parent_id, all_tasks())
 
 
 def resolve_to_leaves(task_ids: list[int], tasks: dict[int, Task]) -> list[int]:
@@ -82,7 +86,7 @@ def resolve_to_leaves(task_ids: list[int], tasks: dict[int, Task]) -> list[int]:
 
     def visit(task_id: int) -> None:
         children = sorted(
-            [t for t in tasks.values() if t.parent_id == task_id],
+            _children_of(task_id, tasks),
             key=lambda t: t.id,
         )
         if not children:
@@ -104,10 +108,11 @@ def next_task_id(parent_id: int | None = None) -> int:
     used_ids = set(tasks.keys())
     if not used_ids:
         return 1
+    parent_task = tasks.get(parent_id) if parent_id is not None else None
     if (
         parent_id is None
-        or parent_id not in tasks
-        or ARCHIVE_DIR_NAME in tasks[parent_id].path.parts
+        or parent_task is None
+        or ARCHIVE_DIR_NAME in parent_task.path.parts
     ):
         return max(used_ids) + 1
     candidate = parent_id + 1
@@ -164,7 +169,7 @@ def auto_complete_parent_of(
     parent = tasks.get(task.parent_id)
     if parent is None or parent.status in {"completed", "draft"}:
         return
-    children = [t for t in tasks.values() if t.parent_id == parent.id]
+    children = _children_of(parent.id, tasks)
     if children and all(c.status == "completed" for c in children):
         parent.complete()
         save_task(parent)

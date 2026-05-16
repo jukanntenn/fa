@@ -107,4 +107,4 @@ if [[ -z "$task_id" ]]; then
     exit 1
 fi
 
-fa gestate "$task_id" --max-rounds 1 --run-rounds 1
+fa gestate "$task_id" --max-rounds 0 --run-rounds 1

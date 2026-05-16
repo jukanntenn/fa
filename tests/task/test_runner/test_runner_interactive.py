@@ -25,11 +25,16 @@ class _FakeProcess:
         self.wait_started = threading.Event()
         self.finished = threading.Event()
 
-    def wait(self) -> int:
-        self.wait_started.set()
-        self.release.wait(timeout=1)
-        self.finished.set()
-        return self.returncode
+    def mock_run_tool(self):
+        def _run(
+            tool, prompt, log_file, logger, *, agent=None, extra_env=None, stdin=None
+        ):
+            self.wait_started.set()
+            self.release.wait(timeout=1)
+            self.finished.set()
+            return self.returncode
+
+        return _run
 
 
 def test_open_viewer_true_opens_controller_without_ctrl_l() -> None:
@@ -62,7 +67,10 @@ def test_open_viewer_true_opens_controller_without_ctrl_l() -> None:
         with (
             patch.object(storage, "find_project_root", return_value=Path(tempdir)),
             patch("fa.task.runner.sys.stdin.isatty", return_value=True),
-            patch("fa.task.runner.subprocess.Popen", return_value=fake_process),
+            patch(
+                "fa.task.runner.run_tool",
+                side_effect=fake_process.mock_run_tool(),
+            ),
             patch("fa.task.runner.ViewerController", FakeController),
             patch("fa.task.runner._read_main_session_key", side_effect=fake_read_key),
             patch("fa.task.runner.build_task_prompt", return_value="prompt"),
@@ -128,7 +136,10 @@ def test_ctrl_l_opens_viewer_and_main_loop_pauses_while_open() -> None:
         with (
             patch.object(storage, "find_project_root", return_value=Path(tempdir)),
             patch("fa.task.runner.sys.stdin.isatty", return_value=True),
-            patch("fa.task.runner.subprocess.Popen", return_value=fake_process),
+            patch(
+                "fa.task.runner.run_tool",
+                side_effect=fake_process.mock_run_tool(),
+            ),
             patch("fa.task.runner.ViewerController", FakeController),
             patch("fa.task.runner._read_main_session_key", side_effect=fake_read_key),
             patch("fa.task.runner.build_task_prompt", return_value="prompt"),
@@ -190,7 +201,10 @@ def test_ctrl_l_reopens_after_viewer_closes() -> None:
         with (
             patch.object(storage, "find_project_root", return_value=Path(tempdir)),
             patch("fa.task.runner.sys.stdin.isatty", return_value=True),
-            patch("fa.task.runner.subprocess.Popen", return_value=fake_process),
+            patch(
+                "fa.task.runner.run_tool",
+                side_effect=fake_process.mock_run_tool(),
+            ),
             patch("fa.task.runner.ViewerController", FakeController),
             patch("fa.task.runner._read_main_session_key", side_effect=fake_read_key),
             patch("fa.task.runner.build_task_prompt", return_value="prompt"),
@@ -241,7 +255,7 @@ def test_run_task_interactive_passes_codex_tool_to_task_viewer() -> None:
         def mark_failed(self) -> None:
             pass
 
-        def _drain_current_log(self) -> None:
+        def drain(self) -> None:
             pass
 
     class FakeController:
@@ -263,7 +277,10 @@ def test_run_task_interactive_passes_codex_tool_to_task_viewer() -> None:
         with (
             patch.object(storage, "find_project_root", return_value=Path(tempdir)),
             patch("fa.task.runner.sys.stdin.isatty", return_value=False),
-            patch("fa.task.runner.subprocess.Popen", return_value=fake_process),
+            patch(
+                "fa.task.runner.run_tool",
+                side_effect=fake_process.mock_run_tool(),
+            ),
             patch("fa.task.runner.TaskViewer", FakeViewer),
             patch("fa.task.runner.ViewerController", FakeController),
             patch("fa.task.runner.build_task_prompt", return_value="prompt"),

@@ -12,6 +12,7 @@ def run_tool_subprocess(
     cmd: list[str],
     log_file: Path,
     extra_env: dict[str, str] | None = None,
+    stdin: int | None = None,
 ) -> int:
     env = {**os.environ, **extra_env} if extra_env else None
     try:
@@ -20,6 +21,7 @@ def run_tool_subprocess(
                 cmd,
                 stdout=handle,
                 stderr=subprocess.STDOUT,
+                stdin=stdin,
                 text=True,
                 check=False,
                 env=env,
@@ -37,7 +39,8 @@ def run_tool(
     *,
     agent: str | None = None,
     extra_env: dict[str, str] | None = None,
+    stdin: int | None = None,
 ) -> int:
     cmd = build_tool_cmd(tool, prompt, agent=agent)
     logger.debug("Executing agent tool command: %s", cmd)
-    return run_tool_subprocess(cmd, log_file, extra_env)
+    return run_tool_subprocess(cmd, log_file, extra_env, stdin=stdin)

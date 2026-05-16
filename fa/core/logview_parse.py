@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Any, Callable
 
 logger = logging.getLogger("fa")
 
@@ -163,27 +164,33 @@ def _format_content_item(item: dict) -> str | None:
     return None
 
 
-def _format_assistant(obj: dict) -> str | None:
+def _format_message_contents(
+    obj: dict,
+    item_formatter: Callable[[Any], str | None],
+) -> str | None:
     contents = obj.get("message", {}).get("content", [])
     if not contents:
         return None
     parts: list[str] = []
     for item in contents:
-        formatted = _format_content_item(item)
+        formatted = item_formatter(item)
         if formatted is not None:
             parts.append(formatted)
     return "\n".join(parts) if parts else None
 
 
+def _format_assistant(obj: dict) -> str | None:
+    return _format_message_contents(obj, _format_content_item)
+
+
+def _user_item_formatter(item: Any) -> str | None:
+    if isinstance(item, dict) and item.get("type") == "tool_result":
+        return _format_tool_result(item)
+    return None
+
+
 def _format_user(obj: dict) -> str | None:
-    contents = obj.get("message", {}).get("content", [])
-    if not contents:
-        return None
-    parts: list[str] = []
-    for item in contents:
-        if isinstance(item, dict) and item.get("type") == "tool_result":
-            parts.append(_format_tool_result(item))
-    return "\n".join(parts) if parts else None
+    return _format_message_contents(obj, _user_item_formatter)
 
 
 def _format_result(obj: dict) -> str:

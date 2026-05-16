@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import sys
 import threading
@@ -12,7 +11,7 @@ from pathlib import Path
 from fa.core.config import (
     AGENT_LOGS_DIR_NAME,
     LOGS_DIR_NAME,
-    build_tool_cmd,
+    TASKS_DIR_NAME,
     tool_extra_env,
 )
 from fa.core.logview import _LIVE_VIEWER_TOOLS, TaskViewer, ViewerController
@@ -81,17 +80,34 @@ def _should_run_round(
     glm_plan: bool,
     logger: logging.Logger,
 ) -> bool:
-    if not glm_plan:
-        return True
-    if check_glm_quota_and_wait(logger):
-        return True
-    logger.error(
-        "Task [%d] round %d/%d skipped - GLM quota check failed",
-        task_id,
-        round_index,
-        rounds,
-    )
-    return False
+    if glm_plan and not check_glm_quota_and_wait(logger):
+        logger.error(
+            "Task [%d] round %d/%d skipped - GLM quota check failed",
+            task_id,
+            round_index,
+            rounds,
+        )
+        return False
+    return True
+
+
+def _poll_keyboard_input(
+    worker: threading.Thread,
+    viewer_controller: ViewerController,
+    logger: logging.Logger,
+    open_viewer: bool,
+) -> None:
+    logger.info("Agent running. Press Ctrl+L to open the log viewer.")
+    if open_viewer:
+        viewer_controller.open()
+    with cbreak_session():
+        while worker.is_alive():
+            if viewer_controller.is_open():
+                time.sleep(0.2)
+                continue
+            key = _read_main_session_key()
+            if key == "\x0c":
+                viewer_controller.open()
 
 
 def _run_task_interactive(
@@ -131,24 +147,16 @@ def _run_task_interactive(
             )
             viewer_log_path = log_path.with_name(f"{log_path.stem}-viewer.log")
             viewer.start_round(round_index, log_path, viewer_log_path)
-            cmd = build_tool_cmd(tool, prompt)
-            env = {**os.environ, **extra_env} if extra_env else None
             log_path.parent.mkdir(parents=True, exist_ok=True)
             t0 = time.monotonic()
-            try:
-                with log_path.open("w", encoding="utf-8") as file:
-                    proc = subprocess.Popen(
-                        cmd,
-                        stdin=subprocess.DEVNULL,
-                        stdout=file,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        env=env,
-                    )
-                    proc.wait()
-                    code = int(proc.returncode)
-            except OSError:
-                code = 1
+            code = run_tool(
+                tool,
+                prompt,
+                log_path,
+                logger,
+                extra_env=extra_env,
+                stdin=subprocess.DEVNULL,
+            )
             elapsed = time.monotonic() - t0
             viewer.end_round(elapsed)
             logger.info(
@@ -170,20 +178,10 @@ def _run_task_interactive(
     if not sys.stdin.isatty():
         worker.join()
     else:
-        logger.info("Agent running. Press Ctrl+L to open the log viewer.")
-        if open_viewer:
-            viewer_controller.open()
-        with cbreak_session():
-            while worker.is_alive():
-                if viewer_controller.is_open():
-                    time.sleep(0.2)
-                    continue
-                key = _read_main_session_key()
-                if key == "\x0c":
-                    viewer_controller.open()
+        _poll_keyboard_input(worker, viewer_controller, logger, open_viewer)
     worker.join()
     viewer_controller.wait_closed()
-    viewer._drain_current_log()
+    viewer.drain()
     return failed
 
 
@@ -223,7 +221,7 @@ def _run_task_batch(
 
 def _task_log_dir(task: Task) -> Path:
     logs_dir = fa_dir() / LOGS_DIR_NAME / AGENT_LOGS_DIR_NAME
-    relative = task.path.relative_to(fa_dir() / "tasks")
+    relative = task.path.relative_to(fa_dir() / TASKS_DIR_NAME)
     path = logs_dir / relative
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -244,6 +242,12 @@ def _save_prompt(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(prompt, encoding="utf-8")
     return path
+
+
+def _append_once(output: list[int], appended: set[int], task_id: int) -> None:
+    if task_id not in appended:
+        output.append(task_id)
+        appended.add(task_id)
 
 
 def build_execution_plan(
@@ -268,19 +272,13 @@ def build_execution_plan(
         if task.parent_id is not None:
             parent_id = task.parent_id
             if parent_id in seen_parents:
-                if task_id not in appended:
-                    output.append(task_id)
-                    appended.add(task_id)
+                _append_once(output, appended, task_id)
                 continue
             for child_id in children.get(parent_id, []):
-                if child_id not in appended:
-                    output.append(child_id)
-                    appended.add(child_id)
+                _append_once(output, appended, child_id)
             seen_parents.add(parent_id)
         else:
-            if task_id not in appended:
-                output.append(task_id)
-                appended.add(task_id)
+            _append_once(output, appended, task_id)
     return output
 
 
