@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from fa.task import runner, storage
 from fa.task.runner import _append_once
@@ -66,7 +66,6 @@ def test_run_tasks_passes_open_viewer_only_to_first_interactive_task() -> None:
                     force=False,
                     tool="claude",
                     rounds=1,
-                    glm_plan=False,
                     attempt_mode=False,
                     open_viewer=True,
                 )
@@ -98,7 +97,6 @@ def test_run_tasks_uses_interactive_viewer_for_codex() -> None:
                     force=False,
                     tool="codex",
                     rounds=1,
-                    glm_plan=False,
                     attempt_mode=False,
                     open_viewer=True,
                 )
@@ -107,33 +105,6 @@ def test_run_tasks_uses_interactive_viewer_for_codex() -> None:
     run_interactive.assert_called_once()
     assert run_interactive.call_args.kwargs["tool"] == "codex"
     assert run_interactive.call_args.kwargs["open_viewer"]
-
-
-def test_should_run_round_returns_true_when_glm_plan_false():
-    from fa.task.runner import _should_run_round
-
-    logger = MagicMock()
-    result = _should_run_round(1, 1, 3, False, logger)
-    assert result is True
-
-
-def test_should_run_round_returns_true_when_quota_check_passes():
-    from fa.task.runner import _should_run_round
-
-    with patch("fa.task.runner.check_glm_quota_and_wait", return_value=True):
-        logger = MagicMock()
-        result = _should_run_round(1, 1, 3, True, logger)
-        assert result is True
-
-
-def test_should_run_round_returns_false_when_quota_check_fails():
-    from fa.task.runner import _should_run_round
-
-    with patch("fa.task.runner.check_glm_quota_and_wait", return_value=False):
-        logger = MagicMock()
-        result = _should_run_round(1, 1, 3, True, logger)
-        assert result is False
-        logger.error.assert_called_once()
 
 
 def test_task_log_dir_returns_path_within_logs_dir(tmp_path: Path) -> None:
@@ -220,27 +191,22 @@ def test_run_task_batch_returns_false_when_all_rounds_succeed(tmp_path: Path) ->
     log_dir.mkdir()
 
     with patch(
-        "fa.task.runner._should_run_round", return_value=True
-    ) as mock_should_run:
-        with patch(
-            "fa.task.runner._prepare_round",
-            return_value=("prompt", tmp_path / "round.md"),
-        ):
-            with patch("fa.task.runner.run_tool", return_value=0) as mock_run_tool:
-                result = _run_task_batch(
-                    task=task,
-                    parent=None,
-                    tool="codex",
-                    rounds=3,
-                    logger=logging.getLogger("test"),
-                    extra_env=None,
-                    attempt_mode=False,
-                    glm_plan=False,
-                    log_dir=log_dir,
-                )
+        "fa.task.runner._prepare_round",
+        return_value=("prompt", tmp_path / "round.md"),
+    ):
+        with patch("fa.task.runner.run_tool", return_value=0) as mock_run_tool:
+            result = _run_task_batch(
+                task=task,
+                parent=None,
+                tool="codex",
+                rounds=3,
+                logger=logging.getLogger("test"),
+                extra_env=None,
+                attempt_mode=False,
+                log_dir=log_dir,
+            )
 
     assert result is False
-    assert mock_should_run.call_count == 3
     assert mock_run_tool.call_count == 3
 
 
@@ -252,57 +218,24 @@ def test_run_task_batch_returns_true_when_round_fails(tmp_path: Path) -> None:
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
 
-    with patch("fa.task.runner._should_run_round", return_value=True):
-        with patch(
-            "fa.task.runner._prepare_round",
-            return_value=("prompt", tmp_path / "round.md"),
-        ):
-            with patch("fa.task.runner.run_tool", return_value=1) as mock_run_tool:
-                result = _run_task_batch(
-                    task=task,
-                    parent=None,
-                    tool="codex",
-                    rounds=3,
-                    logger=logging.getLogger("test"),
-                    extra_env=None,
-                    attempt_mode=False,
-                    glm_plan=False,
-                    log_dir=log_dir,
-                )
+    with patch(
+        "fa.task.runner._prepare_round",
+        return_value=("prompt", tmp_path / "round.md"),
+    ):
+        with patch("fa.task.runner.run_tool", return_value=1) as mock_run_tool:
+            result = _run_task_batch(
+                task=task,
+                parent=None,
+                tool="codex",
+                rounds=3,
+                logger=logging.getLogger("test"),
+                extra_env=None,
+                attempt_mode=False,
+                log_dir=log_dir,
+            )
 
     assert result is True
     assert mock_run_tool.call_count == 1
-
-
-def test_run_task_batch_stops_early_when_should_not_run_round(tmp_path: Path) -> None:
-    from fa.task.runner import _run_task_batch
-
-    task = _create_approved_task(tmp_path)
-
-    log_dir = tmp_path / "logs"
-    log_dir.mkdir()
-
-    with patch(
-        "fa.task.runner._should_run_round", return_value=False
-    ) as mock_should_run:
-        with patch("fa.task.runner._prepare_round") as mock_prepare:
-            with patch("fa.task.runner.run_tool") as mock_run_tool:
-                result = _run_task_batch(
-                    task=task,
-                    parent=None,
-                    tool="codex",
-                    rounds=3,
-                    logger=logging.getLogger("test"),
-                    extra_env=None,
-                    attempt_mode=False,
-                    glm_plan=True,
-                    log_dir=log_dir,
-                )
-
-    assert result is True
-    assert mock_should_run.call_count == 1
-    assert mock_prepare.call_count == 0
-    assert mock_run_tool.call_count == 0
 
 
 def test_prepare_round_returns_prompt_and_log_path(tmp_path: Path) -> None:
@@ -378,7 +311,6 @@ def test_run_tasks_force_resets_non_approved_failed_status(tmp_path: Path) -> No
                         force=True,
                         tool="claude",
                         rounds=1,
-                        glm_plan=False,
                         attempt_mode=False,
                         open_viewer=False,
                     )
@@ -394,7 +326,6 @@ def test_run_tasks_missing_task_returns_failure(tmp_path: Path) -> None:
             force=False,
             tool="claude",
             rounds=1,
-            glm_plan=False,
             attempt_mode=False,
         )
     assert result == 1
@@ -417,7 +348,6 @@ def test_run_tasks_template_not_found_returns_failure(tmp_path: Path) -> None:
                 force=False,
                 tool="claude",
                 rounds=1,
-                glm_plan=False,
                 attempt_mode=False,
             )
     assert result == 1
@@ -442,7 +372,6 @@ def test_run_tasks_batch_failure_marks_task_failed(tmp_path: Path) -> None:
                     force=False,
                     tool="generic-tool",
                     rounds=1,
-                    glm_plan=False,
                     attempt_mode=False,
                 )
 

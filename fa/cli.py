@@ -10,12 +10,15 @@ from fa.core.config import LOGS_DIR_NAME
 from fa.core.logging import configure_logging
 from fa.core.project import ensure_fa_structure, find_project_root
 from fa.gestate.commands import gestate
+from fa.nudge.commands import nudge
 from fa.policy.commands import policy_app
+from fa.profile.commands import profile_app
 from fa.task.commands import task_app
 
 app = typer.Typer(help="Harness Engineering Tool")
 app.add_typer(task_app, name="task")
 app.add_typer(policy_app, name="policy")
+app.add_typer(profile_app, name="profile")
 
 
 @dataclass
@@ -39,6 +42,7 @@ def init() -> None:
 
 
 app.command("gestate")(gestate)
+app.command("nudge")(nudge)
 
 
 def main() -> None:

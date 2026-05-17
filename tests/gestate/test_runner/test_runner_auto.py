@@ -82,7 +82,7 @@ def test_run_runnable_task_tree_calls_run_tasks_with_execution_plan() -> None:
 
             with patch("fa.gestate.commands.run_tasks", return_value=0) as run_tasks:
                 result = gestate_commands._run_runnable_task_tree(
-                    parent, Mock(), "codex", 3, False
+                    parent, Mock(), "codex", 3
                 )
 
     assert result == 0
@@ -91,7 +91,6 @@ def test_run_runnable_task_tree_calls_run_tasks_with_execution_plan() -> None:
     assert not run_tasks.call_args.kwargs["force"]
     assert run_tasks.call_args.kwargs["tool"] == "codex"
     assert run_tasks.call_args.kwargs["rounds"] == 3
-    assert not run_tasks.call_args.kwargs["glm_plan"]
     assert not run_tasks.call_args.kwargs["attempt_mode"]
 
 
@@ -108,7 +107,7 @@ def test_run_runnable_task_tree_passes_open_viewer_to_run_tasks() -> None:
 
             with patch("fa.gestate.commands.run_tasks", return_value=0) as run_tasks:
                 result = gestate_commands._run_runnable_task_tree(
-                    task, Mock(), "claude", 3, False, open_viewer=True
+                    task, Mock(), "claude", 3, open_viewer=True
                 )
 
     assert result == 0
@@ -129,7 +128,7 @@ def test_run_runnable_task_tree_propagates_failure_code() -> None:
 
             with patch("fa.gestate.commands.run_tasks", return_value=1):
                 result = gestate_commands._run_runnable_task_tree(
-                    task, Mock(), "codex", 3, False
+                    task, Mock(), "codex", 3
                 )
 
     assert result == 1
@@ -149,7 +148,7 @@ def test_run_runnable_task_tree_returns_zero_when_no_candidates() -> None:
 
             with patch("fa.gestate.commands.run_tasks") as run_tasks:
                 result = gestate_commands._run_runnable_task_tree(
-                    parent, Mock(), "codex", 3, False
+                    parent, Mock(), "codex", 3
                 )
 
     assert result == 0

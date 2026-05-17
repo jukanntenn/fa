@@ -32,6 +32,8 @@ def _truncate(text: str, max_len: int = 200, preserve_newlines: bool = False) ->
 _ANSI_CSI_END = frozenset(chr(c) for c in range(0x40, 0x7F))
 _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
+_SGR_RESET_CODES = frozenset({"22", "23", "24", "25", "27", "28", "29", "39", "49"})
+
 
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
@@ -44,17 +46,7 @@ def _update_sgr_depth(params: str, depth: int) -> int:
         code = codes[i] or "0"
         if code == "0":
             depth = 0
-        elif code in {
-            "22",
-            "23",
-            "24",
-            "25",
-            "27",
-            "28",
-            "29",
-            "39",
-            "49",
-        }:
+        elif code in _SGR_RESET_CODES:
             depth = max(0, depth - 1)
         elif code in {"38", "48"}:
             if i + 1 < len(codes) and codes[i + 1] == "5":
@@ -244,7 +236,17 @@ def parse_codex_line(line: str, state: dict[str, str] | None = None) -> str | No
     if state.get("exec_output_seen") == "1":
         return _truncate(raw, 4000, preserve_newlines=True)
 
-    section = state.get("section", "metadata")
+    return _format_codex_section_line(
+        state.get("section", "metadata"), stripped, raw, state
+    )
+
+
+def _format_codex_section_line(
+    section: str,
+    stripped: str,
+    raw: str,
+    state: dict[str, str],
+) -> str | None:
     lowered = stripped.lower()
     if section in {"metadata", "user"} and (
         "api error" in lowered

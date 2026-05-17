@@ -27,7 +27,16 @@ class _FakeProcess:
 
     def mock_run_tool(self):
         def _run(
-            tool, prompt, log_file, logger, *, agent=None, extra_env=None, stdin=None
+            tool,
+            prompt,
+            log_file,
+            logger,
+            *,
+            agent=None,
+            model=None,
+            extra_args=None,
+            extra_env=None,
+            stdin=None,
         ):
             self.wait_started.set()
             self.release.wait(timeout=1)
@@ -83,7 +92,6 @@ def test_open_viewer_true_opens_controller_without_ctrl_l() -> None:
                 logger=logging.getLogger("test"),
                 extra_env=None,
                 attempt_mode=False,
-                glm_plan=False,
                 log_dir=log_dir,
                 open_viewer=True,
             )
@@ -152,7 +160,6 @@ def test_ctrl_l_opens_viewer_and_main_loop_pauses_while_open() -> None:
                 logger=logging.getLogger("test"),
                 extra_env=None,
                 attempt_mode=False,
-                glm_plan=False,
                 log_dir=log_dir,
             )
 
@@ -217,7 +224,6 @@ def test_ctrl_l_reopens_after_viewer_closes() -> None:
                 logger=logging.getLogger("test"),
                 extra_env=None,
                 attempt_mode=False,
-                glm_plan=False,
                 log_dir=log_dir,
                 open_viewer=False,
             )
@@ -293,7 +299,6 @@ def test_run_task_interactive_passes_codex_tool_to_task_viewer() -> None:
                 logger=logging.getLogger("test"),
                 extra_env=None,
                 attempt_mode=False,
-                glm_plan=False,
                 log_dir=log_dir,
             )
 

@@ -12,7 +12,6 @@ from fa.core.config import (
     tool_extra_env,
 )
 from fa.core.git import changed_files, is_git_repo
-from fa.core.quota import check_glm_quota_and_wait
 from fa.core.subprocess import run_tool
 from fa.policy.model import Policy
 from fa.policy.storage import load_policy
@@ -86,9 +85,15 @@ def run_policy(
     policy_id: str,
     tool: str,
     rounds: int,
-    glm_plan: bool = False,
+    *,
+    model: str | None = None,
+    extra_args: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> int:
-    extra_env = tool_extra_env(tool)
+    tool_env = tool_extra_env(tool)
+    merged_env = (
+        {**(extra_env or {}), **(tool_env or {})} if extra_env or tool_env else None
+    )
 
     logs_dir = fa_dir() / LOGS_DIR_NAME / AGENT_LOGS_DIR_NAME / f"policy-{policy_id}"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -97,15 +102,6 @@ def run_policy(
     for round_index in range(1, rounds + 1):
         date = datetime.now().strftime("%Y-%m-%d")
         time_str = datetime.now().strftime("%H%M%S")
-        if glm_plan and not check_glm_quota_and_wait(logger):
-            logger.error(
-                'Policy "%s" round %d/%d skipped - GLM quota check failed',
-                policy_id,
-                round_index,
-                rounds,
-            )
-            has_failure = True
-            break
         policy = load_policy(
             policy_id,
             context={"date": date, "time": time_str, "round": round_index},
@@ -139,7 +135,14 @@ def run_policy(
         )
         t0 = time.monotonic()
         code = run_tool(
-            tool, prompt, log_file, logger, agent=policy.agent, extra_env=extra_env
+            tool,
+            prompt,
+            log_file,
+            logger,
+            agent=policy.agent,
+            model=model,
+            extra_args=extra_args,
+            extra_env=merged_env,
         )
         elapsed = int(time.monotonic() - t0)
         logger.info(
@@ -164,13 +167,22 @@ def run_policies_by_ids(
     policy_ids: list[str],
     tool: str,
     rounds: int,
-    glm_plan: bool = False,
+    *,
+    model: str | None = None,
+    extra_args: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> int:
     has_failure = False
     for policy_id in policy_ids:
         try:
             code = run_policy(
-                logger, policy_id, tool=tool, rounds=rounds, glm_plan=glm_plan
+                logger,
+                policy_id,
+                tool=tool,
+                rounds=rounds,
+                model=model,
+                extra_args=extra_args,
+                extra_env=extra_env,
             )
         except FileNotFoundError:
             logger.error("Policy %s not found", policy_id)

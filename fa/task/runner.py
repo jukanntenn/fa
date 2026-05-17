@@ -15,7 +15,6 @@ from fa.core.config import (
     tool_extra_env,
 )
 from fa.core.logview import _LIVE_VIEWER_TOOLS, TaskViewer, ViewerController
-from fa.core.quota import check_glm_quota_and_wait
 from fa.core.subprocess import run_tool
 from fa.core.tty import _read_main_session_key, cbreak_session
 from fa.task.model import Task
@@ -73,24 +72,6 @@ def _prepare_round(
     return prompt, log_path
 
 
-def _should_run_round(
-    task_id: int,
-    round_index: int,
-    rounds: int,
-    glm_plan: bool,
-    logger: logging.Logger,
-) -> bool:
-    if glm_plan and not check_glm_quota_and_wait(logger):
-        logger.error(
-            "Task [%d] round %d/%d skipped - GLM quota check failed",
-            task_id,
-            round_index,
-            rounds,
-        )
-        return False
-    return True
-
-
 def _poll_keyboard_input(
     worker: threading.Thread,
     viewer_controller: ViewerController,
@@ -118,9 +99,10 @@ def _run_task_interactive(
     logger: logging.Logger,
     extra_env: dict[str, str] | None,
     attempt_mode: bool,
-    glm_plan: bool,
     log_dir: Path,
     open_viewer: bool = False,
+    model: str | None = None,
+    extra_args: list[str] | None = None,
 ) -> bool:
     viewer = TaskViewer(slug=task.slug, total_rounds=rounds, tool=tool)
     viewer_controller = ViewerController(viewer)
@@ -130,10 +112,6 @@ def _run_task_interactive(
         nonlocal failed
         ctx = _prompt_run_context(task, attempt_mode)
         for round_index in range(1, rounds + 1):
-            if not _should_run_round(task.id, round_index, rounds, glm_plan, logger):
-                failed = True
-                viewer.mark_failed()
-                return
             prompt, log_path = _prepare_round(
                 task,
                 parent,
@@ -154,6 +132,8 @@ def _run_task_interactive(
                 prompt,
                 log_path,
                 logger,
+                model=model,
+                extra_args=extra_args,
                 extra_env=extra_env,
                 stdin=subprocess.DEVNULL,
             )
@@ -193,18 +173,25 @@ def _run_task_batch(
     logger: logging.Logger,
     extra_env: dict[str, str] | None,
     attempt_mode: bool,
-    glm_plan: bool,
     log_dir: Path,
+    model: str | None = None,
+    extra_args: list[str] | None = None,
 ) -> bool:
     ctx = _prompt_run_context(task, attempt_mode)
     for round_index in range(1, rounds + 1):
-        if not _should_run_round(task.id, round_index, rounds, glm_plan, logger):
-            return True
         prompt, log_path = _prepare_round(
             task, parent, attempt_mode, ctx, log_dir, round_index, rounds, tool, logger
         )
         t0 = time.monotonic()
-        code = run_tool(tool, prompt, log_path, logger, extra_env=extra_env)
+        code = run_tool(
+            tool,
+            prompt,
+            log_path,
+            logger,
+            model=model,
+            extra_args=extra_args,
+            extra_env=extra_env,
+        )
         elapsed = int(time.monotonic() - t0)
         logger.info(
             "Task [%d] round %d/%d completed in %ds | exit_code=%d",
@@ -288,10 +275,12 @@ def run_tasks(
     force: bool,
     tool: str,
     rounds: int,
-    glm_plan: bool,
     attempt_mode: bool,
     *,
     open_viewer: bool = False,
+    model: str | None = None,
+    extra_args: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> int:
     tasks = all_tasks()
 
@@ -304,7 +293,10 @@ def run_tasks(
                 task.completed_at = None
                 save_task(task)
 
-    extra_env = tool_extra_env(tool)
+    tool_env = tool_extra_env(tool)
+    merged_env = (
+        {**(extra_env or {}), **(tool_env or {})} if extra_env or tool_env else None
+    )
 
     plan = ids
     logger.info("Execution plan: %d tasks %s", len(plan), plan)
@@ -338,11 +330,12 @@ def run_tasks(
                 tool=tool,
                 rounds=rounds,
                 logger=logger,
-                extra_env=extra_env,
+                extra_env=merged_env,
                 attempt_mode=attempt_mode,
-                glm_plan=glm_plan,
                 log_dir=log_dir,
                 open_viewer=open_viewer_for_next_live_task,
+                model=model,
+                extra_args=extra_args,
             )
             open_viewer_for_next_live_task = False
         else:
@@ -352,10 +345,11 @@ def run_tasks(
                 tool=tool,
                 rounds=rounds,
                 logger=logger,
-                extra_env=extra_env,
+                extra_env=merged_env,
                 attempt_mode=attempt_mode,
-                glm_plan=glm_plan,
                 log_dir=log_dir,
+                model=model,
+                extra_args=extra_args,
             )
         if failed:
             has_failure = True

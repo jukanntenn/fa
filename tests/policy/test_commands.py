@@ -32,9 +32,15 @@ def test_run_delegates_to_runner() -> None:
         patch("fa.cli.app_state") as mock_state,
         patch("fa.policy.commands.run_policies_by_ids", return_value=0) as mock_run,
     ):
-        commands.run(["policy-a"], tool="codex", rounds=3, glm_plan=False)
+        commands.run(["policy-a"], tool="codex", rounds=3, profile=None)
         mock_run.assert_called_once_with(
-            mock_state.logger, ["policy-a"], tool="codex", rounds=3, glm_plan=False
+            mock_state.logger,
+            ["policy-a"],
+            tool="codex",
+            rounds=3,
+            model=None,
+            extra_args=None,
+            extra_env=None,
         )
 
 
@@ -64,9 +70,15 @@ def test_run_all_delegates_to_runner() -> None:
         ),
         patch("fa.policy.commands.run_policies_by_ids", return_value=0) as mock_run,
     ):
-        commands.run_all(tool="claude", rounds=5, glm_plan=True)
+        commands.run_all(tool="claude", rounds=5, profile=None)
         mock_run.assert_called_once_with(
-            mock_state.logger, ["x"], tool="claude", rounds=5, glm_plan=True
+            mock_state.logger,
+            ["x"],
+            tool="claude",
+            rounds=5,
+            model=None,
+            extra_args=None,
+            extra_env=None,
         )
 
 

@@ -65,7 +65,7 @@ TOOL_COMMANDS: dict[str, list[str]] = {
         "{prompt}",
     ],
     "opencode": ["opencode", "run", "{prompt}", "--print-logs", "--log-level", "DEBUG"],
-    "codex": ["codex", "exec", "--full-auto", "{prompt}"],
+    "codex": ["codex", "exec", "-s", "danger-full-access", "{prompt}"],
 }
 
 TOOL_AGENT_ARG: dict[str, str] = {
@@ -77,32 +77,50 @@ TOOL_AGENT_ARG: dict[str, str] = {
 }
 
 
-def _render_cmd_template(template: list[str], prompt: str) -> list[str]:
-    return [part.format(prompt=prompt) for part in template]
+def _render_cmd_template(template: list[str], prompt: str) -> tuple[list[str], int]:
+    prompt_idx = template.index("{prompt}")
+    return [part.format(prompt=prompt) for part in template], prompt_idx
 
 
 def _build_agent_cmd(
     template: list[str], prompt: str, agent: str, arg_style: str
-) -> list[str]:
+) -> tuple[list[str], int]:
     if arg_style == "$":
         return _render_cmd_template(template, f"${agent} {prompt}")
-    cmd = _render_cmd_template(template, prompt)
-    idx = template.index("{prompt}")
-    cmd[idx:idx] = [arg_style, agent]
-    return cmd
+    cmd, prompt_idx = _render_cmd_template(template, prompt)
+    cmd[prompt_idx:prompt_idx] = [arg_style, agent]
+    return cmd, prompt_idx + 2
 
 
-def build_tool_cmd(tool: str, prompt: str, *, agent: str | None = None) -> list[str]:
+def build_tool_cmd(
+    tool: str,
+    prompt: str,
+    *,
+    agent: str | None = None,
+    model: str | None = None,
+    extra_args: list[str] | None = None,
+) -> list[str]:
     if tool not in TOOL_COMMANDS:
         raise ValueError(
             f"unknown tool '{tool}'. Available: {', '.join(TOOL_COMMANDS.keys())}"
         )
     template = TOOL_COMMANDS[tool]
     if agent is not None:
-        return _build_agent_cmd(
+        cmd, prompt_idx = _build_agent_cmd(
             template, prompt, agent, TOOL_AGENT_ARG.get(tool, "--agent")
         )
-    return _render_cmd_template(template, prompt)
+    else:
+        cmd, prompt_idx = _render_cmd_template(template, prompt)
+
+    inserts: list[str] = []
+    if model is not None:
+        inserts.extend(["--model", model])
+    if extra_args:
+        inserts.extend(extra_args)
+    if inserts:
+        cmd[prompt_idx:prompt_idx] = inserts
+
+    return cmd
 
 
 def tool_extra_env(tool: str) -> dict[str, str] | None:

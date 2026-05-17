@@ -38,9 +38,11 @@ def run_tool(
     logger: logging.Logger,
     *,
     agent: str | None = None,
+    model: str | None = None,
+    extra_args: list[str] | None = None,
     extra_env: dict[str, str] | None = None,
     stdin: int | None = None,
 ) -> int:
-    cmd = build_tool_cmd(tool, prompt, agent=agent)
+    cmd = build_tool_cmd(tool, prompt, agent=agent, model=model, extra_args=extra_args)
     logger.debug("Executing agent tool command: %s", cmd)
     return run_tool_subprocess(cmd, log_file, extra_env, stdin=stdin)

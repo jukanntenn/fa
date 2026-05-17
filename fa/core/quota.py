@@ -25,7 +25,7 @@ def _load_settings() -> dict | None:
 THRESHOLD = 70
 
 
-def check_glm_quota(logger: logging.Logger) -> QuotaResult:
+def check_glm_quota(logger: logging.Logger, threshold: int = THRESHOLD) -> QuotaResult:
     settings = _load_settings()
     token = (settings or {}).get("env", {}).get("ANTHROPIC_AUTH_TOKEN")
     if not token:
@@ -46,11 +46,11 @@ def check_glm_quota(logger: logging.Logger) -> QuotaResult:
         if item.get("type") != "TOKENS_LIMIT":
             continue
         percentage = float(item.get("percentage", 0))
-        if percentage < THRESHOLD:
+        if percentage < threshold:
             logger.debug(
                 "GLM quota: %.0f%% (threshold: %d%%) - proceeding",
                 percentage,
-                THRESHOLD,
+                threshold,
             )
             return QuotaResult(True, None)
         next_reset = item.get("nextResetTime")
@@ -58,15 +58,15 @@ def check_glm_quota(logger: logging.Logger) -> QuotaResult:
             logger.warning(
                 "GLM quota: %.0f%% (threshold: %d%%) - no reset time, cannot wait",
                 percentage,
-                THRESHOLD,
+                threshold,
             )
             return QuotaResult(False, None)
-        wait_until_ts = int(next_reset / 1000) + 1800
+        wait_until_ts = int(next_reset / 1000)
         wait_until_dt = datetime.fromtimestamp(wait_until_ts)
         logger.warning(
-            "GLM quota: %.0f%% (threshold: %d%%) - exceeded, should wait until %s (+30min buffer)",
+            "GLM quota: %.0f%% (threshold: %d%%) - exceeded, should wait until %s",
             percentage,
-            THRESHOLD,
+            threshold,
             wait_until_dt.strftime("%Y-%m-%d %H:%M:%S"),
         )
         return QuotaResult(False, wait_until_ts)

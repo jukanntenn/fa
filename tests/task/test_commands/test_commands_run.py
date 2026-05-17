@@ -44,9 +44,9 @@ def test_run_command_force_without_ids() -> None:
                 tool="codex",
                 rounds=3,
                 policies=None,
-                glm_plan=False,
                 attempt=False,
                 yes=False,
+                profile=None,
             )
         except typer.Exit as exc:
             assert exc.exit_code == 1
@@ -68,9 +68,9 @@ def test_run_command_no_candidates() -> None:
                 tool="codex",
                 rounds=3,
                 policies=None,
-                glm_plan=False,
                 attempt=False,
                 yes=True,
+                profile=None,
             )
 
 
@@ -92,9 +92,9 @@ def test_run_command_with_ids() -> None:
                 tool="codex",
                 rounds=3,
                 policies=None,
-                glm_plan=False,
                 attempt=False,
                 yes=True,
+                profile=None,
             )
 
 
@@ -114,9 +114,9 @@ def test_run_command_with_missing_ids() -> None:
                 tool="codex",
                 rounds=3,
                 policies=None,
-                glm_plan=False,
                 attempt=False,
                 yes=True,
+                profile=None,
             )
         except typer.Exit as exc:
             assert exc.exit_code == 1
@@ -145,9 +145,9 @@ def test_run_command_nonzero_exit() -> None:
                     tool="codex",
                     rounds=3,
                     policies=None,
-                    glm_plan=False,
                     attempt=False,
                     yes=True,
+                    profile=None,
                 )
             except typer.Exit as exc:
                 assert exc.exit_code == 1
@@ -174,9 +174,9 @@ def test_run_command_with_policies() -> None:
                 tool="codex",
                 rounds=3,
                 policies="lint,typecheck",
-                glm_plan=False,
                 attempt=False,
                 yes=True,
+                profile=None,
             )
 
 
@@ -199,9 +199,9 @@ def test_run_command_candidate_validation_error() -> None:
                     tool="codex",
                     rounds=3,
                     policies=None,
-                    glm_plan=False,
                     attempt=False,
                     yes=True,
+                    profile=None,
                 )
             except typer.Exit as exc:
                 assert exc.exit_code == 1
@@ -231,7 +231,6 @@ def test_run_command_shows_confirm_and_parent_info(capsys) -> None:
                 tool="codex",
                 rounds=3,
                 policies=None,
-                glm_plan=False,
                 attempt=False,
                 yes=False,
             )
@@ -261,7 +260,6 @@ def test_run_command_confirm_declined() -> None:
                     tool="codex",
                     rounds=3,
                     policies=None,
-                    glm_plan=False,
                     attempt=False,
                     yes=False,
                 )
@@ -293,9 +291,9 @@ def test_run_command_policies_nonzero_exit() -> None:
                     tool="codex",
                     rounds=3,
                     policies="check",
-                    glm_plan=False,
                     attempt=False,
                     yes=True,
+                    profile=None,
                 )
             except typer.Exit as exc:
                 assert exc.exit_code == 1

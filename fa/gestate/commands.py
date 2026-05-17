@@ -26,6 +26,7 @@ from fa.gestate.tasks import (
     _resolve_task_descendants,
     _validate_task,
 )
+from fa.profile.storage import resolve_profile_phase
 from fa.task.model import Task
 from fa.task.runner import run_tasks
 from fa.task.storage import all_tasks, fa_dir, find_task, relative_path, save_task
@@ -57,9 +58,11 @@ def _run_runnable_task_tree(
     logger: logging.Logger,
     tool: str,
     rounds: int,
-    glm_plan: bool,
     *,
     open_viewer: bool = False,
+    model: str | None = None,
+    extra_args: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> int:
     candidates = _resolve_execution_candidates(task)
     if not candidates:
@@ -76,9 +79,11 @@ def _run_runnable_task_tree(
         force=False,
         tool=tool,
         rounds=rounds,
-        glm_plan=glm_plan,
         attempt_mode=False,
         open_viewer=open_viewer,
+        model=model,
+        extra_args=extra_args,
+        extra_env=extra_env,
     )
 
 
@@ -95,13 +100,39 @@ def gestate(
     run_rounds: int = typer.Option(
         3, "--run-rounds", help="Execution rounds for each task"
     ),
-    glm_plan: bool = typer.Option(
-        False, "--glm-plan", help="Check GLM plan quota before execution rounds"
+    profile: str | None = typer.Option(
+        None, "--profile", help="Profile name for tool configuration"
     ),
 ) -> None:
     from fa.cli import app_state
 
     logger = cast(logging.Logger, app_state.logger)
+
+    create_model = None
+    create_extra_args = None
+    create_extra_env = None
+    run_model = None
+    run_extra_args = None
+    run_extra_env = None
+    if isinstance(profile, str):
+        create_resolved = resolve_profile_phase(
+            profile, "gestate-create", fallback_tool=tool
+        )
+        tool = create_resolved.tool or tool
+        create_model = create_resolved.model
+        create_extra_args = create_resolved.extra_args
+        create_extra_env = create_resolved.extra_env
+        review_resolved = resolve_profile_phase(
+            profile, "gestate-review", fallback_tool=tool
+        )
+        tool = review_resolved.tool or tool
+        run_resolved = resolve_profile_phase(
+            profile, "gestate-run", fallback_tool=run_tool
+        )
+        run_tool = run_resolved.tool or run_tool
+        run_model = run_resolved.model
+        run_extra_args = run_resolved.extra_args
+        run_extra_env = run_resolved.extra_env
 
     if arg is not None:
         input_text = arg.strip()
@@ -150,6 +181,9 @@ def gestate(
             round_index=1,
             viewer_controller=viewer_controller,
             prompt_path=prompt_path,
+            model=create_model,
+            extra_args=create_extra_args,
+            extra_env=create_extra_env,
         )
         if result_code is None:
             typer.echo(f"Error: tool '{tool}' execution failed", err=True)
@@ -275,8 +309,10 @@ def gestate(
                 logger,
                 run_tool,
                 run_rounds,
-                glm_plan,
                 open_viewer=handoff_open_viewer,
+                model=run_model,
+                extra_args=run_extra_args,
+                extra_env=run_extra_env,
             )
             if exit_code != 0:
                 raise typer.Exit(code=exit_code)

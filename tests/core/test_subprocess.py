@@ -58,7 +58,9 @@ def test_run_tool_calls_build_tool_cmd(mock_run_subprocess, mock_build_cmd, tmp_
     mock_run_subprocess.return_value = 0
     logger = MagicMock()
     result = run_tool("test_tool", "test prompt", tmp_path / "log.txt", logger)
-    mock_build_cmd.assert_called_once_with("test_tool", "test prompt", agent=None)
+    mock_build_cmd.assert_called_once_with(
+        "test_tool", "test prompt", agent=None, model=None, extra_args=None
+    )
     assert result == 0
 
 
@@ -72,7 +74,7 @@ def test_run_tool_with_agent(mock_run_subprocess, mock_build_cmd, tmp_path):
         "test_tool", "test prompt", tmp_path / "log.txt", logger, agent="rectifier"
     )
     mock_build_cmd.assert_called_once_with(
-        "test_tool", "test prompt", agent="rectifier"
+        "test_tool", "test prompt", agent="rectifier", model=None, extra_args=None
     )
     assert result == 0
 

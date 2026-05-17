@@ -151,7 +151,8 @@ def test_codex_without_agent():
     assert build_tool_cmd("codex", "do stuff") == [
         "codex",
         "exec",
-        "--full-auto",
+        "-s",
+        "danger-full-access",
         "do stuff",
     ]
 
@@ -216,7 +217,8 @@ def test_codex_with_agent():
     assert build_tool_cmd("codex", "do stuff", agent="reviewer") == [
         "codex",
         "exec",
-        "--full-auto",
+        "-s",
+        "danger-full-access",
         "$reviewer do stuff",
     ]
 
@@ -260,9 +262,9 @@ def test_tool_extra_env_returns_key_for_codex_with_env(tmp_path, monkeypatch):
 
 # ─── _build_agent_cmd ──────────────────────────────────────────
 def test_build_agent_cmd_dollar_style():
-    codex_template = ["codex", "exec", "--full-auto", "{prompt}"]
-    result = _build_agent_cmd(codex_template, "hello world", "coder", "$")
-    assert result == ["codex", "exec", "--full-auto", "$coder hello world"]
+    codex_template = ["codex", "exec", "-s", "danger-full-access", "{prompt}"]
+    cmd, _ = _build_agent_cmd(codex_template, "hello world", "coder", "$")
+    assert cmd == ["codex", "exec", "-s", "danger-full-access", "$coder hello world"]
 
 
 def test_build_agent_cmd_flag_style():
@@ -275,9 +277,9 @@ def test_build_agent_cmd_flag_style():
         "--verbose",
         "{prompt}",
     ]
-    result = _build_agent_cmd(claude_template, "hello", "reviewer", "--agent")
-    assert result[6:8] == ["--agent", "reviewer"]
-    assert result[8] == "hello"
+    cmd, _ = _build_agent_cmd(claude_template, "hello", "reviewer", "--agent")
+    assert cmd[6:8] == ["--agent", "reviewer"]
+    assert cmd[8] == "hello"
 
 
 def test_build_tool_cmd_without_agent():

@@ -130,7 +130,7 @@ def test_check_glm_quota_returns_wait_until_ts_when_threshold_exceeded() -> None
         result = quota.check_glm_quota(logging.getLogger("test"))
 
     assert result.proceed is False
-    assert result.wait_until_ts == int(1000 / 1000) + 1800
+    assert result.wait_until_ts == int(1000 / 1000)
 
 
 def test_wait_for_quota_reset_sleeps_until_ts_reached() -> None:

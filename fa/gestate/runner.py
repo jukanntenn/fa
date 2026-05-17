@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -22,8 +23,14 @@ def _run_tool_with_optional_viewer(
     round_index: int,
     viewer_controller: ViewerController | None = None,
     prompt_path: Path | None = None,
+    model: str | None = None,
+    extra_args: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> int | None:
-    cmd, prompt_stdin = _build_tool_cmd_for_prompt(tool, prompt, prompt_path)
+    cmd, prompt_stdin = _build_tool_cmd_for_prompt(
+        tool, prompt, prompt_path, model=model, extra_args=extra_args
+    )
+    env = {**os.environ, **extra_env} if extra_env else None
     log_path.parent.mkdir(parents=True, exist_ok=True)
     if viewer is None or tool not in _LIVE_VIEWER_TOOLS:
         try:
@@ -35,6 +42,7 @@ def _run_tool_with_optional_viewer(
                     stderr=subprocess.STDOUT,
                     text=True,
                     check=False,
+                    env=env,
                 )
         except OSError:
             return None
@@ -57,6 +65,7 @@ def _run_tool_with_optional_viewer(
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    env=env,
                 )
                 proc.communicate(input=prompt_stdin)
                 return_code = int(proc.returncode)

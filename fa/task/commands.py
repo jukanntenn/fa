@@ -7,6 +7,7 @@ from typing import Annotated
 
 import typer
 
+from fa.profile.storage import resolve_profile_phase
 from fa.task.model import InvalidTransition, Task
 from fa.task.runner import build_execution_plan, run_tasks
 from fa.task.storage import (
@@ -208,13 +209,25 @@ def run(
     tool: str = typer.Option("codex", "--tool"),
     rounds: int = typer.Option(3, "--rounds"),
     policies: str | None = typer.Option(None, "--policies"),
-    glm_plan: bool = typer.Option(False, "--glm-plan"),
     attempt: bool = typer.Option(False, "--attempt"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+    profile: str | None = typer.Option(
+        None, "--profile", help="Profile name for tool configuration"
+    ),
 ) -> None:
     from fa.cli import app_state
 
     logger = app_state.logger
+
+    run_model = None
+    run_extra_args = None
+    run_extra_env = None
+    if isinstance(profile, str):
+        resolved = resolve_profile_phase(profile, "task-run", fallback_tool=tool)
+        tool = resolved.tool or tool
+        run_model = resolved.model
+        run_extra_args = resolved.extra_args
+        run_extra_env = resolved.extra_env
 
     # Validate flags
     if force and ids is None:
@@ -280,8 +293,10 @@ def run(
         force=force or attempt,
         tool=tool,
         rounds=rounds,
-        glm_plan=glm_plan,
         attempt_mode=attempt,
+        model=run_model,
+        extra_args=run_extra_args,
+        extra_env=run_extra_env,
     )
     if policies:
         from fa.policy.runner import run_policies_by_ids

@@ -129,25 +129,6 @@ def test_run_policy_continues_through_all_rounds():
         assert mock_run.call_count == 3
 
 
-def test_run_policy_returns_one_when_glm_quota_fails():
-    with TemporaryDirectory() as tempdir:
-        with patch("fa.policy.runner.check_glm_quota_and_wait", return_value=False):
-            with patch("fa.policy.runner.load_policy") as mock_load:
-                mock_policy = MagicMock()
-                mock_policy.id = "test"
-                mock_load.return_value = mock_policy
-
-                with patch("fa.policy.runner.fa_dir", return_value=Path(tempdir)):
-                    result = run_policy(
-                        logger=MagicMock(),
-                        policy_id="test",
-                        tool="codex",
-                        rounds=3,
-                        glm_plan=True,
-                    )
-        assert result == 1
-
-
 # ─── scoped_files ──────────────────────────────────────────────
 
 
