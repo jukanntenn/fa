@@ -2,27 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
-def _strip_quotes(value: str) -> str:
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        return value[1:-1]
-    return value
-
-
-def _load_dotenv(path: Path) -> dict[str, str]:
-    env: dict[str, str] = {}
-    if not path.is_file():
-        return env
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        env[key.strip()] = _strip_quotes(value.strip())
-    return env
-
+from fa.core.env import load_dotenv
 
 FA_DIR_NAME = ".fa"
 TASKS_DIR_NAME = "tasks"
@@ -126,23 +106,10 @@ def build_tool_cmd(
 def tool_extra_env(tool: str) -> dict[str, str] | None:
     if tool != "codex":
         return None
-    dotenv = _load_dotenv(Path.cwd() / ".env")
+    dotenv = load_dotenv(Path.cwd() / ".env")
     if "CODEX_API_KEY" in dotenv:
         return {"CODEX_API_KEY": dotenv["CODEX_API_KEY"]}
     return None
-
-
-VALID_STATUSES = {"draft", "approved", "running", "failed", "completed"}
-
-VALID_TRANSITIONS: dict[str, set[str]] = {
-    "draft": {"approved"},
-    "approved": {"running", "completed"},
-    "running": {"completed", "failed"},
-    "failed": {"running", "completed"},
-    "completed": set(),
-}
-
-STATUS_ALIASES: dict[str, str] = {"pending": "draft"}
 
 
 def package_template_dir() -> Path:

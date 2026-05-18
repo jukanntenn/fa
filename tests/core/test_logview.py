@@ -4,11 +4,12 @@ import json
 
 from fa.core.logview import parse_codex_line, parse_jsonl_line
 from fa.core.logview_parse import (
-    _RESET,
+    RESET,
+    _CodexState,
     _strip_ansi,
     _tool_input_summary,
     _truncate,
-    _truncate_to_visible,
+    truncate_to_visible,
     _update_sgr_depth,
 )
 
@@ -104,40 +105,38 @@ def test_tool_input_summary_fallback_for_missing_keys() -> None:
     assert result == "other_key=..."
 
 
-def test_truncate_to_visible_plain_text_truncation() -> None:
-    assert _truncate_to_visible("hello world", 5) == "hello"
+def testtruncate_to_visible_plain_text_truncation() -> None:
+    assert truncate_to_visible("hello world", 5) == "hello"
 
 
-def test_truncate_to_visible_preserves_complete_ansi_sequence_and_resets_open_style() -> (
+def testtruncate_to_visible_preserves_complete_ansi_sequence_and_resets_open_style() -> (
     None
 ):
-    assert _truncate_to_visible("\033[31mhello\033[0m", 3) == "\033[31mhel\033[0m"
+    assert truncate_to_visible("\033[31mhello\033[0m", 3) == "\033[31mhel\033[0m"
 
 
-def test_truncate_to_visible_closing_foreground_prevents_extra_reset() -> None:
+def testtruncate_to_visible_closing_foreground_prevents_extra_reset() -> None:
     assert (
-        _truncate_to_visible("\033[31mred\033[39m plain", 6) == "\033[31mred\033[39m pl"
+        truncate_to_visible("\033[31mred\033[39m plain", 6) == "\033[31mred\033[39m pl"
     )
 
 
-def test_truncate_to_visible_reset_plus_style_counts_as_open_style() -> None:
-    assert _truncate_to_visible("\033[0;31mhello", 3) == "\033[0;31mhel\033[0m"
+def testtruncate_to_visible_reset_plus_style_counts_as_open_style() -> None:
+    assert truncate_to_visible("\033[0;31mhello", 3) == "\033[0;31mhel\033[0m"
 
 
-def test_truncate_to_visible_incomplete_ansi_sequence_is_not_emitted() -> None:
-    assert _truncate_to_visible("abc\033[31", 10) == "abc"
+def testtruncate_to_visible_incomplete_ansi_sequence_is_not_emitted() -> None:
+    assert truncate_to_visible("abc\033[31", 10) == "abc"
 
 
-def test_truncate_to_visible_escape_sequence_after_visible_limit_is_not_emitted() -> (
+def testtruncate_to_visible_escape_sequence_after_visible_limit_is_not_emitted() -> (
     None
 ):
-    assert _truncate_to_visible("abc\033[31m", 3) == "abc"
+    assert truncate_to_visible("abc\033[31m", 3) == "abc"
 
 
-def test_truncate_to_visible_extended_foreground_color_resets_when_truncated() -> None:
-    assert (
-        _truncate_to_visible("\033[38;5;196mabcdef", 3) == f"\033[38;5;196mabc{_RESET}"
-    )
+def testtruncate_to_visible_extended_foreground_color_resets_when_truncated() -> None:
+    assert truncate_to_visible("\033[38;5;196mabcdef", 3) == f"\033[38;5;196mabc{RESET}"
 
 
 def test_result_message_is_not_truncated() -> None:
@@ -159,7 +158,7 @@ def test_result_message_is_not_truncated() -> None:
 
 
 def test_codex_metadata_renders_compact_header() -> None:
-    result = parse_codex_line("OpenAI Codex v0.125.0 (research preview)", {})
+    result = parse_codex_line("OpenAI Codex v0.125.0 (research preview)", _CodexState())
 
     assert result is not None
     assert "[codex]" in result
@@ -167,14 +166,14 @@ def test_codex_metadata_renders_compact_header() -> None:
 
 
 def test_codex_suppresses_user_prompt_body() -> None:
-    state: dict[str, str] = {}
+    state = _CodexState()
 
     assert parse_codex_line("user", state) is None
     assert parse_codex_line("# Task Information", state) is None
 
 
 def test_codex_formats_assistant_text() -> None:
-    state: dict[str, str] = {}
+    state = _CodexState()
 
     parse_codex_line("codex", state)
     result = parse_codex_line("I'll inspect the code now.", state)
@@ -185,7 +184,7 @@ def test_codex_formats_assistant_text() -> None:
 
 
 def test_codex_formats_exec_command_and_success() -> None:
-    state: dict[str, str] = {}
+    state = _CodexState()
 
     parse_codex_line("exec", state)
     command = parse_codex_line(
@@ -201,7 +200,7 @@ def test_codex_formats_exec_command_and_success() -> None:
 
 
 def test_codex_formats_exec_success_after_codex_marker() -> None:
-    state: dict[str, str] = {}
+    state = _CodexState()
 
     parse_codex_line("exec", state)
     parse_codex_line('python -c "print(1)"', state)

@@ -15,32 +15,63 @@ from fa.core.subprocess import run_tool
 from fa.task.storage import fa_dir
 
 
-def extract_task_id(output: str) -> int | None:
+def _extract_from_tasks_array(data: dict) -> list[int]:
+    if "tasks" in data and isinstance(data["tasks"], list):
+        ids = []
+        for item in data["tasks"]:
+            if isinstance(item, dict) and "task_id" in item:
+                try:
+                    ids.append(int(item["task_id"]))
+                except (ValueError, TypeError):
+                    pass
+        return ids
+    return []
+
+
+def _extract_single_task_id(data: dict) -> list[int]:
+    if "task_id" in data:
+        try:
+            return [int(data["task_id"])]
+        except (ValueError, TypeError):
+            pass
+    return []
+
+
+def _extract_ids_from_dict(data: dict) -> list[int]:
+    ids = _extract_from_tasks_array(data)
+    if ids:
+        return ids
+    return _extract_single_task_id(data)
+
+
+def _try_extract_task_ids_from_json(text: str) -> list[int] | None:
     try:
-        data = json.loads(output)
-        if isinstance(data, dict) and "task_id" in data:
-            return int(data["task_id"])
+        data = json.loads(text)
+        if isinstance(data, dict):
+            ids = _extract_ids_from_dict(data)
+            if ids:
+                return ids
     except (json.JSONDecodeError, ValueError, TypeError):
         pass
+    return None
 
-    code_block_match = re.search(r"```json\s*(.*?)\s*```", output, re.DOTALL)
-    if code_block_match:
-        try:
-            data = json.loads(code_block_match.group(1))
-            if isinstance(data, dict) and "task_id" in data:
-                return int(data["task_id"])
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
+
+def extract_task_ids(output: str) -> list[int]:
+    ids = _try_extract_task_ids_from_json(output)
+    if ids:
+        return ids
+
+    for match in re.findall(r"```json\s*(.*?)\s*```", output, re.DOTALL):
+        ids = _try_extract_task_ids_from_json(match)
+        if ids:
+            return ids
 
     for obj in _find_json_objects(output):
-        try:
-            data = json.loads(obj)
-            if isinstance(data, dict) and "task_id" in data:
-                return int(data["task_id"])
-        except (json.JSONDecodeError, ValueError, TypeError):
-            continue
+        ids = _try_extract_task_ids_from_json(obj)
+        if ids:
+            return ids
 
-    return None
+    return []
 
 
 def _find_json_objects(text: str) -> list[str]:
@@ -50,11 +81,21 @@ def _find_json_objects(text: str) -> list[str]:
         if text[i] == "{":
             depth = 1
             j = i + 1
+            in_string = False
             while j < len(text) and depth > 0:
-                if text[j] == "{":
-                    depth += 1
-                elif text[j] == "}":
-                    depth -= 1
+                ch = text[j]
+                if in_string:
+                    if ch == "\\":
+                        j += 1
+                    elif ch == '"':
+                        in_string = False
+                else:
+                    if ch == '"':
+                        in_string = True
+                    elif ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
                 j += 1
             if depth == 0:
                 results.append(text[i:j])
@@ -149,37 +190,38 @@ def run_nudge_loop(
             )
             continue
         output = log_path.read_text(encoding="utf-8")
-        task_id = extract_task_id(output)
-        if task_id is None:
+        task_ids = extract_task_ids(output)
+        if not task_ids:
             logger.warning(
-                "Nudge iteration %d: no task_id found in output", breaker._iteration
+                "Nudge iteration %d: no task IDs found in output", breaker._iteration
             )
             continue
         from fa.gestate.commands import gestate
 
-        try:
-            gestate(
-                arg=str(task_id),
-                tool=gestate_tool,
-                max_rounds=gestate_max_rounds,
-                run=gestate_run,
-                run_tool=gestate_tool,
-                run_rounds=gestate_run_rounds,
-                profile=profile,
-            )
-        except SystemExit as exc:
-            if exc.code not in (None, 0):
-                logger.error(
-                    "Nudge iteration %d: gestate for task %d failed (exit %s)",
-                    breaker._iteration,
-                    task_id,
-                    exc.code,
+        for task_id in task_ids:
+            try:
+                gestate(
+                    arg=str(task_id),
+                    tool=gestate_tool,
+                    max_rounds=gestate_max_rounds,
+                    run=gestate_run,
+                    run_tool=gestate_tool,
+                    run_rounds=gestate_run_rounds,
+                    profile=profile,
                 )
-                continue
-        logger.info(
-            "Nudge iteration %d: gestate for task %d completed",
-            breaker._iteration,
-            task_id,
-        )
+            except SystemExit as exc:
+                if exc.code not in (None, 0):
+                    logger.error(
+                        "Nudge iteration %d: gestate for task %d failed (exit %s)",
+                        breaker._iteration,
+                        task_id,
+                        exc.code,
+                    )
+                    continue
+            logger.info(
+                "Nudge iteration %d: gestate for task %d completed",
+                breaker._iteration,
+                task_id,
+            )
     logger.info("Nudge loop stopped by signal")
     return 0

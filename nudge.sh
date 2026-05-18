@@ -38,16 +38,30 @@ if [[ -z "$json" ]]; then
     exit 1
 fi
 
-task_id=$(echo "$json" | python3 -c '
+task_ids=$(echo "$json" | python3 -c '
 import sys, json, re
 raw = sys.stdin.read()
 
 # Try direct JSON parse
 try:
     data = json.loads(raw)
-    if isinstance(data, dict) and "task_id" in data:
-        print(data["task_id"])
-        sys.exit(0)
+    if isinstance(data, dict):
+        # Try new tasks array format first
+        if "tasks" in data and isinstance(data["tasks"], list):
+            ids = []
+            for item in data["tasks"]:
+                if isinstance(item, dict) and "task_id" in item:
+                    try:
+                        ids.append(str(int(item["task_id"])))
+                    except (ValueError, TypeError):
+                        pass
+            if ids:
+                print("\n".join(ids))
+                sys.exit(0)
+        # Fallback to single task_id
+        if "task_id" in data:
+            print(int(data["task_id"]))
+            sys.exit(0)
 except Exception:
     pass
 
@@ -86,25 +100,41 @@ def find_json_objects(text):
 for obj in find_json_objects(raw):
     try:
         data = json.loads(obj)
-        if isinstance(data, dict) and "task_id" in data:
-            print(data["task_id"])
-            sys.exit(0)
+        if isinstance(data, dict):
+            # Try new tasks array format
+            if "tasks" in data and isinstance(data["tasks"], list):
+                ids = []
+                for item in data["tasks"]:
+                    if isinstance(item, dict) and "task_id" in item:
+                        try:
+                            ids.append(str(int(item["task_id"])))
+                        except (ValueError, TypeError):
+                            pass
+                if ids:
+                    print("\n".join(ids))
+                    sys.exit(0)
+            # Fallback to single task_id
+            if "task_id" in data:
+                print(int(data["task_id"]))
+                sys.exit(0)
     except Exception:
         pass
 
 sys.exit(1)
 ' 2>/dev/null) || {
-    echo "Error: failed to parse task_id from JSON" >&2
+    echo "Error: failed to parse task IDs from JSON" >&2
     echo "--- extracted JSON ---" >&2
     echo "$json" >&2
     exit 1
 }
 
-if [[ -z "$task_id" ]]; then
-    echo "Error: task_id not found in JSON" >&2
+if [[ -z "$task_ids" ]]; then
+    echo "Error: no task IDs found in JSON" >&2
     echo "--- extracted JSON ---" >&2
     echo "$json" >&2
     exit 1
 fi
 
-fa gestate "$task_id" --max-rounds 0 --run-rounds 1
+while IFS= read -r task_id; do
+    fa gestate "$task_id" --max-rounds 0 --run-rounds 1
+done <<< "$task_ids"

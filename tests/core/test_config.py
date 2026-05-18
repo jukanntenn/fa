@@ -5,87 +5,88 @@ from pathlib import Path
 
 import pytest
 
-from fa.core.config import _build_agent_cmd, _load_dotenv, _strip_quotes, build_tool_cmd
+from fa.core.config import _build_agent_cmd, build_tool_cmd
+from fa.core.env import load_dotenv, strip_quotes
 
 
 def test_strips_double_quotes():
-    assert _strip_quotes('"hello"') == "hello"
+    assert strip_quotes('"hello"') == "hello"
 
 
 def test_strips_single_quotes():
-    assert _strip_quotes("'hello'") == "hello"
+    assert strip_quotes("'hello'") == "hello"
 
 
 def test_no_quotes_unchanged():
-    assert _strip_quotes("hello") == "hello"
+    assert strip_quotes("hello") == "hello"
 
 
 def test_mismatched_quotes_unchanged():
-    assert _strip_quotes("\"hello'") == "\"hello'"
+    assert strip_quotes("\"hello'") == "\"hello'"
 
 
 def test_inner_quotes_preserved():
-    assert _strip_quotes('"it\'s here"') == "it's here"
+    assert strip_quotes('"it\'s here"') == "it's here"
 
 
 def test_empty_quoted_value():
-    assert _strip_quotes('""') == ""
-    assert _strip_quotes("''") == ""
+    assert strip_quotes('""') == ""
+    assert strip_quotes("''") == ""
 
 
 def test_single_character_unquoted():
-    assert _strip_quotes("a") == "a"
+    assert strip_quotes("a") == "a"
 
 
 def test_single_quote_char():
-    assert _strip_quotes('"') == '"'
+    assert strip_quotes('"') == '"'
 
 
 def test_dotenv_strips_double_quotes():
     with tempfile.TemporaryDirectory() as d:
         env_file = Path(d) / ".env"
         env_file.write_text('KEY="value"\n', encoding="utf-8")
-        assert _load_dotenv(env_file) == {"KEY": "value"}
+        assert load_dotenv(env_file) == {"KEY": "value"}
 
 
 def test_dotenv_strips_single_quotes():
     with tempfile.TemporaryDirectory() as d:
         env_file = Path(d) / ".env"
         env_file.write_text("KEY='value'\n", encoding="utf-8")
-        assert _load_dotenv(env_file) == {"KEY": "value"}
+        assert load_dotenv(env_file) == {"KEY": "value"}
 
 
 def test_dotenv_no_quotes_unchanged():
     with tempfile.TemporaryDirectory() as d:
         env_file = Path(d) / ".env"
         env_file.write_text("KEY=value\n", encoding="utf-8")
-        assert _load_dotenv(env_file) == {"KEY": "value"}
+        assert load_dotenv(env_file) == {"KEY": "value"}
 
 
 def test_dotenv_mismatched_quotes_unchanged():
     with tempfile.TemporaryDirectory() as d:
         env_file = Path(d) / ".env"
         env_file.write_text("KEY=\"value'\n", encoding="utf-8")
-        assert _load_dotenv(env_file) == {"KEY": "\"value'"}
+        assert load_dotenv(env_file) == {"KEY": "\"value'"}
 
 
 def test_dotenv_inner_quotes_preserved():
     with tempfile.TemporaryDirectory() as d:
         env_file = Path(d) / ".env"
         env_file.write_text('KEY="it\'s here"\n', encoding="utf-8")
-        assert _load_dotenv(env_file) == {"KEY": "it's here"}
+        assert load_dotenv(env_file) == {"KEY": "it's here"}
 
 
 def test_dotenv_empty_quoted_value():
     with tempfile.TemporaryDirectory() as d:
         env_file = Path(d) / ".env"
         env_file.write_text('KEY=""\n', encoding="utf-8")
-        assert _load_dotenv(env_file) == {"KEY": ""}
+        assert load_dotenv(env_file) == {"KEY": ""}
 
 
 def test_dotenv_nonexistent_file_returns_empty():
     with tempfile.TemporaryDirectory() as d:
-        result = _load_dotenv(Path(d) / "nonexistent.env")
+        result = load_dotenv(Path(d) / "nonexistent.env")
         assert result == {}
 
 
@@ -96,7 +97,7 @@ def test_dotenv_comments_and_blank_lines_skipped():
             "# this is a comment\n\n\nKEY=value\n# another comment\nFOO='bar'\n",
             encoding="utf-8",
         )
-        assert _load_dotenv(env_file) == {"KEY": "value", "FOO": "bar"}
+        assert load_dotenv(env_file) == {"KEY": "value", "FOO": "bar"}
 
 
 def test_claude_without_agent():

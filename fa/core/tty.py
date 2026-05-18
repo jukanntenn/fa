@@ -3,6 +3,12 @@ from __future__ import annotations
 import contextlib
 import select
 import sys
+import threading
+import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fa.core.logview_viewer import ViewerController
 
 
 @contextlib.contextmanager
@@ -42,3 +48,20 @@ def _read_main_session_key() -> str | None:
         return sys.stdin.read(1)
     except OSError:
         return None
+
+
+def poll_keyboard_for_viewer(
+    worker: threading.Thread,
+    viewer_controller: ViewerController,
+    open_viewer: bool,
+) -> None:
+    if open_viewer:
+        viewer_controller.open()
+    with cbreak_session():
+        while worker.is_alive():
+            if viewer_controller.is_open():
+                time.sleep(0.2)
+                continue
+            key = _read_main_session_key()
+            if key == "\x0c":
+                viewer_controller.open()

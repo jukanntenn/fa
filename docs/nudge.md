@@ -1,6 +1,6 @@
 # Nudge Command
 
-Automated iterative workflow: run an AI tool, extract a `task_id` from its output, then call `fa gestate` on it. Repeats until stopped.
+Automated iterative workflow: run an AI tool, extract task IDs from its output, then call `fa gestate` on each. Repeats until stopped.
 
 ## Usage
 
@@ -29,8 +29,8 @@ fa nudge --no-gestate-run         # only run the tool, skip gestate
 ## How It Works
 
 1. Sends `--prompt` to `--tool`, captures output
-2. Extracts a `task_id` from the output (supports raw JSON, fenced code blocks, nested objects)
-3. If found, runs `fa gestate` on that task
+2. Extracts task IDs from a `{"tasks": [...]}` JSON structure (falls back to single `task_id` for backward compat)
+3. For each task found, runs `fa gestate` on it
 4. Repeats until max iterations or Ctrl+C
 
 Logs are written to `.fa/logs/agents/nudge/`.

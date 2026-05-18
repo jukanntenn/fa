@@ -25,10 +25,11 @@ def find_project_root(start: Path | None = None) -> Path:
 
 def ensure_fa_structure(project_root: Path) -> Path:
     fa_dir = project_root / FA_DIR_NAME
-    tasks_dir = fa_dir / TASKS_DIR_NAME
-    (tasks_dir / ARCHIVE_DIR_NAME).mkdir(parents=True, exist_ok=True)
-    logs_dir = fa_dir / LOGS_DIR_NAME
-    (logs_dir / AGENT_LOGS_DIR_NAME).mkdir(parents=True, exist_ok=True)
-    (fa_dir / POLICIES_DIR_NAME).mkdir(parents=True, exist_ok=True)
-    (fa_dir / TEMPLATES_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    for path in (
+        fa_dir / TASKS_DIR_NAME / ARCHIVE_DIR_NAME,
+        fa_dir / LOGS_DIR_NAME / AGENT_LOGS_DIR_NAME,
+        fa_dir / POLICIES_DIR_NAME,
+        fa_dir / TEMPLATES_DIR_NAME,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
     return fa_dir

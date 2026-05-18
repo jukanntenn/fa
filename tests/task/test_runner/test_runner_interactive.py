@@ -81,7 +81,7 @@ def test_open_viewer_true_opens_controller_without_ctrl_l() -> None:
                 side_effect=fake_process.mock_run_tool(),
             ),
             patch("fa.task.runner.ViewerController", FakeController),
-            patch("fa.task.runner._read_main_session_key", side_effect=fake_read_key),
+            patch("fa.core.tty._read_main_session_key", side_effect=fake_read_key),
             patch("fa.task.runner.build_task_prompt", return_value="prompt"),
         ):
             result = runner._run_task_interactive(
@@ -149,7 +149,7 @@ def test_ctrl_l_opens_viewer_and_main_loop_pauses_while_open() -> None:
                 side_effect=fake_process.mock_run_tool(),
             ),
             patch("fa.task.runner.ViewerController", FakeController),
-            patch("fa.task.runner._read_main_session_key", side_effect=fake_read_key),
+            patch("fa.core.tty._read_main_session_key", side_effect=fake_read_key),
             patch("fa.task.runner.build_task_prompt", return_value="prompt"),
         ):
             result = runner._run_task_interactive(
@@ -213,7 +213,7 @@ def test_ctrl_l_reopens_after_viewer_closes() -> None:
                 side_effect=fake_process.mock_run_tool(),
             ),
             patch("fa.task.runner.ViewerController", FakeController),
-            patch("fa.task.runner._read_main_session_key", side_effect=fake_read_key),
+            patch("fa.core.tty._read_main_session_key", side_effect=fake_read_key),
             patch("fa.task.runner.build_task_prompt", return_value="prompt"),
         ):
             result = runner._run_task_interactive(

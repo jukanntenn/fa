@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import cast
 
 import typer
 
 from fa.core.config import AGENT_LOGS_DIR_NAME, LOGS_DIR_NAME
-from fa.core.logview import _LIVE_VIEWER_TOOLS, TaskViewer, ViewerController
+from fa.core.logview import LIVE_VIEWER_TOOLS, TaskViewer, ViewerController
 from fa.gestate.artifacts import (
     _capture_artifact_snapshot,
     _format_artifact_diff,
@@ -87,6 +89,57 @@ def _run_runnable_task_tree(
     )
 
 
+def _build_log_paths(log_dir: Path, prefix: str) -> tuple[Path, Path]:
+    return log_dir / f"{prefix}.log", log_dir / f"{prefix}-prompt.md"
+
+
+@dataclass(frozen=True)
+class _ResolvedProfile:
+    tool: str
+    create_model: str | None
+    create_extra_args: list[str] | None
+    create_extra_env: dict[str, str] | None
+    run_tool: str
+    run_model: str | None
+    run_extra_args: list[str] | None
+    run_extra_env: dict[str, str] | None
+
+
+def _resolve_gestate_profile(
+    profile: str | None, tool: str, run_tool: str
+) -> _ResolvedProfile:
+    if not isinstance(profile, str):
+        return _ResolvedProfile(
+            tool=tool,
+            create_model=None,
+            create_extra_args=None,
+            create_extra_env=None,
+            run_tool=run_tool,
+            run_model=None,
+            run_extra_args=None,
+            run_extra_env=None,
+        )
+    create_resolved = resolve_profile_phase(
+        profile, "gestate-create", fallback_tool=tool
+    )
+    tool = create_resolved.tool or tool
+    review_resolved = resolve_profile_phase(
+        profile, "gestate-review", fallback_tool=tool
+    )
+    tool = review_resolved.tool or tool
+    run_resolved = resolve_profile_phase(profile, "gestate-run", fallback_tool=run_tool)
+    return _ResolvedProfile(
+        tool=tool,
+        create_model=create_resolved.model,
+        create_extra_args=create_resolved.extra_args,
+        create_extra_env=create_resolved.extra_env,
+        run_tool=run_resolved.tool or run_tool,
+        run_model=run_resolved.model,
+        run_extra_args=run_resolved.extra_args,
+        run_extra_env=run_resolved.extra_env,
+    )
+
+
 def gestate(
     arg: str | None = typer.Argument(None, help="Intent brief or task ID"),
     tool: str = typer.Option("claude", "--tool", help="AI tool to use"),
@@ -108,31 +161,15 @@ def gestate(
 
     logger = cast(logging.Logger, app_state.logger)
 
-    create_model = None
-    create_extra_args = None
-    create_extra_env = None
-    run_model = None
-    run_extra_args = None
-    run_extra_env = None
-    if isinstance(profile, str):
-        create_resolved = resolve_profile_phase(
-            profile, "gestate-create", fallback_tool=tool
-        )
-        tool = create_resolved.tool or tool
-        create_model = create_resolved.model
-        create_extra_args = create_resolved.extra_args
-        create_extra_env = create_resolved.extra_env
-        review_resolved = resolve_profile_phase(
-            profile, "gestate-review", fallback_tool=tool
-        )
-        tool = review_resolved.tool or tool
-        run_resolved = resolve_profile_phase(
-            profile, "gestate-run", fallback_tool=run_tool
-        )
-        run_tool = run_resolved.tool or run_tool
-        run_model = run_resolved.model
-        run_extra_args = run_resolved.extra_args
-        run_extra_env = run_resolved.extra_env
+    resolved = _resolve_gestate_profile(profile, tool, run_tool)
+    tool = resolved.tool
+    run_tool = resolved.run_tool
+    create_model = resolved.create_model
+    create_extra_args = resolved.create_extra_args
+    create_extra_env = resolved.create_extra_env
+    run_model = resolved.run_model
+    run_extra_args = resolved.run_extra_args
+    run_extra_env = resolved.run_extra_env
 
     if arg is not None:
         input_text = arg.strip()
@@ -150,7 +187,7 @@ def gestate(
             total_rounds=max_rounds + create_phase_rounds,
             tool=tool,
         )
-        if tool in _LIVE_VIEWER_TOOLS
+        if tool in LIVE_VIEWER_TOOLS
         else None
     )
     viewer_controller = ViewerController(viewer) if viewer is not None else None
@@ -168,8 +205,9 @@ def gestate(
         gestate_log_dir = fa_dir() / LOGS_DIR_NAME / AGENT_LOGS_DIR_NAME / "gestate"
         gestate_log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        log_path = gestate_log_dir / f"gestate-create-{timestamp}.log"
-        prompt_path = gestate_log_dir / f"gestate-create-{timestamp}-prompt.md"
+        log_path, prompt_path = _build_log_paths(
+            gestate_log_dir, f"gestate-create-{timestamp}"
+        )
         prompt_path.write_text(prompt, encoding="utf-8")
         logger.info("Creating task from intent brief using tool=%s", tool)
         result_code = _run_tool_with_optional_viewer(
@@ -222,7 +260,7 @@ def gestate(
     for round_num in range(1, max_rounds + 1):
         before_snapshot = _capture_artifact_snapshot(task.path)
         prompt = _build_review_prompt(task, round_num, max_rounds)
-        prompt_path = log_dir / f"round-{round_num}-prompt.md"
+        _, prompt_path = _build_log_paths(log_dir, f"round-{round_num}")
         prompt_path.write_text(prompt, encoding="utf-8")
         log_path = log_dir / f"round-{round_num}-{tool}.log"
         logger.info(
@@ -299,7 +337,7 @@ def gestate(
                 viewer_controller is not None and viewer_controller.is_open()
             )
             should_close_viewer = handoff_open_viewer
-            handoff_open_viewer = handoff_open_viewer and run_tool in _LIVE_VIEWER_TOOLS
+            handoff_open_viewer = handoff_open_viewer and run_tool in LIVE_VIEWER_TOOLS
             if should_close_viewer:
                 assert viewer_controller is not None
                 viewer_controller.close()

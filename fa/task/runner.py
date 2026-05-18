@@ -14,9 +14,9 @@ from fa.core.config import (
     TASKS_DIR_NAME,
     tool_extra_env,
 )
-from fa.core.logview import _LIVE_VIEWER_TOOLS, TaskViewer, ViewerController
+from fa.core.logview import LIVE_VIEWER_TOOLS, TaskViewer, ViewerController
 from fa.core.subprocess import run_tool
-from fa.core.tty import _read_main_session_key, cbreak_session
+from fa.core.tty import poll_keyboard_for_viewer
 from fa.task.model import Task
 from fa.task.prompt import build_task_prompt, infer_attempt, infer_memory_sequence
 from fa.task.storage import all_tasks, auto_complete_parent_of, fa_dir, save_task
@@ -79,16 +79,7 @@ def _poll_keyboard_input(
     open_viewer: bool,
 ) -> None:
     logger.info("Agent running. Press Ctrl+L to open the log viewer.")
-    if open_viewer:
-        viewer_controller.open()
-    with cbreak_session():
-        while worker.is_alive():
-            if viewer_controller.is_open():
-                time.sleep(0.2)
-                continue
-            key = _read_main_session_key()
-            if key == "\x0c":
-                viewer_controller.open()
+    poll_keyboard_for_viewer(worker, viewer_controller, open_viewer)
 
 
 def _run_task_interactive(
@@ -323,7 +314,7 @@ def run_tasks(
         logger.info('Task [%d] "%s" started', task.id, task.slug)
         failed = False
         log_dir = _task_log_dir(task)
-        if tool in _LIVE_VIEWER_TOOLS:
+        if tool in LIVE_VIEWER_TOOLS:
             failed = _run_task_interactive(
                 task=task,
                 parent=parent,

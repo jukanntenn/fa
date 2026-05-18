@@ -219,9 +219,7 @@ def test_stream_runner_does_not_read_keys_while_viewer_is_open() -> None:
         with (
             patch("fa.gestate.runner.sys.stdin.isatty", return_value=True),
             patch("fa.gestate.runner.subprocess.Popen", return_value=FakeProcess()),
-            patch(
-                "fa.gestate.runner._read_main_session_key", side_effect=fake_read_key
-            ),
+            patch("fa.core.tty._read_main_session_key", side_effect=fake_read_key),
             patch.object(viewer, "run", side_effect=fake_viewer_run),
         ):
             try:

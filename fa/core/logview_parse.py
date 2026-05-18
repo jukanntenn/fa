@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import re
@@ -9,14 +10,14 @@ logger = logging.getLogger("fa")
 
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
-_RESET = "\033[0m"
+RESET = "\033[0m"
 _RED = "\033[31m"
 _GREEN = "\033[32m"
 _CYAN = "\033[36m"
 _YELLOW = "\033[33m"
 
-_STREAM_JSON_TOOLS = {"claude", "ccr"}
-_LIVE_VIEWER_TOOLS = {"claude", "ccr", "codex"}
+STREAM_JSON_TOOLS = {"claude", "ccr"}
+LIVE_VIEWER_TOOLS = {"claude", "ccr", "codex"}
 
 
 def _truncate(text: str, max_len: int = 200, preserve_newlines: bool = False) -> str:
@@ -33,6 +34,17 @@ _ANSI_CSI_END = frozenset(chr(c) for c in range(0x40, 0x7F))
 _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 _SGR_RESET_CODES = frozenset({"22", "23", "24", "25", "27", "28", "29", "39", "49"})
+
+_CODEX_METADATA_PREFIXES = (
+    "workdir:",
+    "model:",
+    "provider:",
+    "approval:",
+    "sandbox:",
+    "reasoning effort:",
+    "reasoning summaries:",
+    "session id:",
+)
 
 
 def _strip_ansi(text: str) -> str:
@@ -60,7 +72,7 @@ def _update_sgr_depth(params: str, depth: int) -> int:
     return depth
 
 
-def _truncate_to_visible(line: str, max_cols: int) -> str:
+def truncate_to_visible(line: str, max_cols: int) -> str:
     if max_cols <= 0:
         return ""
     result: list[str] = []
@@ -88,13 +100,20 @@ def _truncate_to_visible(line: str, max_cols: int) -> str:
         i += 1
     text = "".join(result)
     if sgr_depth:
-        text += _RESET
+        text += RESET
     return text
 
 
-def _reset_exec_state(state: dict[str, str]) -> None:
-    state.pop("exec_command_seen", None)
-    state.pop("exec_output_seen", None)
+@dataclasses.dataclass
+class _CodexState:
+    section: str = "metadata"
+    exec_command_seen: bool = False
+    exec_output_seen: bool = False
+    codex_header_seen: bool = False
+
+    def reset_exec(self) -> None:
+        self.exec_command_seen = False
+        self.exec_output_seen = False
 
 
 def parse_jsonl_line(line: str) -> str | None:
@@ -105,7 +124,7 @@ def parse_jsonl_line(line: str) -> str | None:
         obj = json.loads(raw)
     except json.JSONDecodeError:
         logger.debug("Failed to parse JSONL line: %s", raw[:500])
-        return f"{_DIM}[raw] {_truncate(raw)}{_RESET}"
+        return f"{_DIM}[raw] {_truncate(raw)}{RESET}"
     msg_type = obj.get("type")
     if msg_type == "system":
         return None
@@ -115,7 +134,7 @@ def parse_jsonl_line(line: str) -> str | None:
         return _format_assistant(obj)
     if msg_type == "user":
         return _format_user(obj)
-    return f"{_DIM}[unknown: {msg_type}]{_RESET}"
+    return f"{_DIM}[unknown: {msg_type}]{RESET}"
 
 
 def _extract_text_content(content: str | list) -> str:
@@ -131,7 +150,7 @@ def _extract_text_content(content: str | list) -> str:
 
 def _format_tool_result(item: dict) -> str:
     content = _extract_text_content(item.get("content", ""))
-    return f"{_DIM}[tool result]{_RESET}\n{_truncate(str(content), 2000, preserve_newlines=True)}"
+    return f"{_DIM}[tool result]{RESET}\n{_truncate(str(content), 2000, preserve_newlines=True)}"
 
 
 def _format_content_item(item: dict) -> str | None:
@@ -143,11 +162,11 @@ def _format_content_item(item: dict) -> str | None:
         name = item.get("name", "unknown")
         inp = item.get("input", {})
         summary = _tool_input_summary(name, inp)
-        return f"{_BOLD}{_CYAN}[tool: {name}]{_RESET} {summary}"
+        return f"{_BOLD}{_CYAN}[tool: {name}]{RESET} {summary}"
     if item_type == "thinking":
         thinking = item.get("thinking", "")
         return (
-            f"{_DIM}[thinking...] {_truncate(thinking, 100)}{_RESET}"
+            f"{_DIM}[thinking...] {_truncate(thinking, 100)}{RESET}"
             if thinking.strip()
             else None
         )
@@ -192,60 +211,58 @@ def _format_result(obj: dict) -> str:
     duration_str = f" in {duration_ms / 1000:.1f}s" if duration_ms is not None else ""
     result = str(result_text).strip()
     if subtype == "success":
-        return f"{_BOLD}{_GREEN}[completed{duration_str}]{_RESET}\n{result}"
-    return f"{_BOLD}{_RED}[failed{duration_str}]{_RESET}\n{result}"
+        return f"{_BOLD}{_GREEN}[completed{duration_str}]{RESET}\n{result}"
+    return f"{_BOLD}{_RED}[failed{duration_str}]{RESET}\n{result}"
 
 
-def parse_codex_line(line: str, state: dict[str, str] | None = None) -> str | None:
+def parse_codex_line(line: str, state: _CodexState | None = None) -> str | None:
     raw = line.rstrip("\n")
     stripped = raw.strip()
     if not stripped:
         return None
     if state is None:
-        state = {}
+        state = _CodexState()
     if stripped == "user":
-        state["section"] = "user"
-        _reset_exec_state(state)
+        state.section = "user"
+        state.reset_exec()
         return None
     if stripped == "codex":
-        state["section"] = "codex"
-        if state.get("exec_output_seen") == "1":
-            _reset_exec_state(state)
+        state.section = "codex"
+        if state.exec_output_seen:
+            state.reset_exec()
         return None
     if stripped == "exec":
-        state["section"] = "exec"
-        _reset_exec_state(state)
+        state.section = "exec"
+        state.reset_exec()
         return None
     if stripped.startswith("OpenAI Codex "):
-        state["section"] = "metadata"
-        _reset_exec_state(state)
-        if state.get("codex_header_seen") == "1":
+        state.section = "metadata"
+        state.reset_exec()
+        if state.codex_header_seen:
             return None
-        state["codex_header_seen"] = "1"
-        return f"{_DIM}[codex] {_truncate(stripped, 160)}{_RESET}"
+        state.codex_header_seen = True
+        return f"{_DIM}[codex] {_truncate(stripped, 160)}{RESET}"
     if stripped == "--------":
         return None
-    if state.get("exec_command_seen") == "1" and raw.startswith(" "):
+    if state.exec_command_seen and raw.startswith(" "):
         lowered = stripped.lower()
-        state["exec_output_seen"] = "1"
+        state.exec_output_seen = True
         if stripped.startswith("succeeded in "):
-            return f"{_BOLD}{_GREEN}[exec succeeded] {_truncate(stripped, 160)}{_RESET}"
+            return f"{_BOLD}{_GREEN}[exec succeeded] {_truncate(stripped, 160)}{RESET}"
         if "failed" in lowered or "error" in lowered or "timed out" in lowered:
-            return f"{_BOLD}{_RED}[exec failed] {_truncate(stripped, 200)}{_RESET}"
+            return f"{_BOLD}{_RED}[exec failed] {_truncate(stripped, 200)}{RESET}"
         return _truncate(raw, 4000, preserve_newlines=True)
-    if state.get("exec_output_seen") == "1":
+    if state.exec_output_seen:
         return _truncate(raw, 4000, preserve_newlines=True)
 
-    return _format_codex_section_line(
-        state.get("section", "metadata"), stripped, raw, state
-    )
+    return _format_codex_section_line(state.section, stripped, raw, state)
 
 
 def _format_codex_section_line(
     section: str,
     stripped: str,
     raw: str,
-    state: dict[str, str],
+    state: _CodexState,
 ) -> str | None:
     lowered = stripped.lower()
     if section in {"metadata", "user"} and (
@@ -254,30 +271,20 @@ def _format_codex_section_line(
         or lowered.startswith("failed")
         or "timed out" in lowered
     ):
-        return f"{_BOLD}{_RED}[codex error]{_RESET} {_truncate(stripped, 4000, preserve_newlines=True)}"
+        return f"{_BOLD}{_RED}[codex error]{RESET} {_truncate(stripped, 4000, preserve_newlines=True)}"
     if section == "user":
         return None
     if section == "metadata" and ":" in stripped:
-        metadata_prefixes = (
-            "workdir:",
-            "model:",
-            "provider:",
-            "approval:",
-            "sandbox:",
-            "reasoning effort:",
-            "reasoning summaries:",
-            "session id:",
-        )
-        if lowered.startswith(metadata_prefixes):
+        if lowered.startswith(_CODEX_METADATA_PREFIXES):
             return None
     if section == "exec":
-        if state.get("exec_command_seen") != "1":
-            state["exec_command_seen"] = "1"
-            state.pop("exec_output_seen", None)
-            return f"{_BOLD}{_CYAN}[tool: exec]{_RESET} {_truncate(stripped, 220)}"
+        if not state.exec_command_seen:
+            state.exec_command_seen = True
+            state.exec_output_seen = False
+            return f"{_BOLD}{_CYAN}[tool: exec]{RESET} {_truncate(stripped, 220)}"
         return _truncate(raw, 4000, preserve_newlines=True)
     if section == "codex":
-        return f"{_BOLD}{_CYAN}[codex]{_RESET} {_truncate(stripped, 4000, preserve_newlines=True)}"
+        return f"{_BOLD}{_CYAN}[codex]{RESET} {_truncate(stripped, 4000, preserve_newlines=True)}"
     return None
 
 
@@ -293,3 +300,10 @@ def _tool_input_summary(name: str, inp: dict) -> str:
         return inp["pattern"]
     keys = list(inp.keys())[:3]
     return ", ".join(f"{k}=..." for k in keys)
+
+
+def _split_complete_lines(text: str) -> list[str]:
+    lines = text.split("\n")
+    if not text.endswith("\n"):
+        lines = lines[:-1]
+    return [line for line in lines if line.strip()]

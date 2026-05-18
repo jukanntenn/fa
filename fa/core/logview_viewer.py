@@ -13,12 +13,14 @@ from fa.core.logview_parse import (
     _DIM,
     _GREEN,
     _RED,
-    _RESET,
     _YELLOW,
+    RESET,
+    _CodexState,
+    _split_complete_lines,
     _strip_ansi,
-    _truncate_to_visible,
     parse_codex_line,
     parse_jsonl_line,
+    truncate_to_visible,
 )
 from fa.core.tty import cbreak_session
 
@@ -34,7 +36,7 @@ class TaskViewer:
         self.slug = slug
         self.total_rounds = total_rounds
         self.tool = tool
-        self._parser_state: dict[str, str] = {}
+        self._parser_state: _CodexState = _CodexState()
         self._entries: list[Entry] = []
         self._scroll_offset = 0
         self._current_round = 0
@@ -59,16 +61,16 @@ class TaskViewer:
             self._viewer_log_path = viewer_log_path
             self._last_log = None
             self._log_offset = 0
-            self._parser_state = {}
+            self._parser_state = _CodexState()
             text = (
-                f"{_DIM}--- Round {round_index}/{self.total_rounds} started ---{_RESET}"
+                f"{_DIM}--- Round {round_index}/{self.total_rounds} started ---{RESET}"
             )
             self._append_entry(Entry(round_index=round_index, text=text))
 
     def end_round(self, duration: float) -> None:
         with self._drain_lock:
             self._drain_current_log_unlocked()
-            text = f"{_DIM}--- Round {self._current_round}/{self.total_rounds} completed ({duration:.1f}s) ---{_RESET}"
+            text = f"{_DIM}--- Round {self._current_round}/{self.total_rounds} completed ({duration:.1f}s) ---{RESET}"
             self._append_entry(Entry(round_index=self._current_round, text=text))
 
     def _append_entry(self, entry: Entry) -> None:
@@ -101,7 +103,7 @@ class TaskViewer:
 
     def _run_loop(self) -> None:
         while True:
-            self._drain_current_log()
+            self.drain()
             self._handle_input()
             self._render()
             if self._should_exit():
@@ -119,9 +121,6 @@ class TaskViewer:
     def drain(self) -> None:
         with self._drain_lock:
             self._drain_current_log_unlocked()
-
-    def _drain_current_log(self) -> None:
-        self.drain()
 
     def _parse_log_line(self, raw_line: str) -> str | None:
         if self.tool == "codex":
@@ -222,10 +221,10 @@ class TaskViewer:
                 and not self._task_failed.is_set()
             )
 
-        header = _truncate_to_visible(self._render_header_with(current_round), cols)
+        header = truncate_to_visible(self._render_header_with(current_round), cols)
         footer_text = self._render_footer()
         footer = (
-            _truncate_to_visible(footer_text, cols) if footer_text is not None else None
+            truncate_to_visible(footer_text, cols) if footer_text is not None else None
         )
         show_header = rows >= 3
         show_footer = show_header and footer is not None
@@ -242,13 +241,11 @@ class TaskViewer:
             visible = body_lines[start:end]
             if start > 0:
                 visible = [
-                    _truncate_to_visible(f"{_DIM}[-- more above --]{_RESET}", cols)
+                    truncate_to_visible(f"{_DIM}[-- more above --]{RESET}", cols)
                 ] + visible[1:]
             if end < len(body_lines):
                 visible = visible[:-1] + [
-                    _truncate_to_visible(
-                        f"{_DIM}[-- new output below --]{_RESET}", cols
-                    )
+                    truncate_to_visible(f"{_DIM}[-- new output below --]{RESET}", cols)
                 ]
 
         output_parts: list[str] = []
@@ -265,38 +262,31 @@ class TaskViewer:
     def _render_body_lines_from(
         self, entries: list[Entry], cols: int, is_waiting: bool
     ) -> list[str]:
-        waiting = _truncate_to_visible(
-            f"{_YELLOW}Waiting for agent output...{_RESET}", cols
+        waiting = truncate_to_visible(
+            f"{_YELLOW}Waiting for agent output...{RESET}", cols
         )
         if not entries:
             return [waiting]
         lines: list[str] = []
         for entry in entries:
             for sub_line in entry.text.split("\n"):
-                lines.append(_truncate_to_visible(sub_line, cols))
+                lines.append(truncate_to_visible(sub_line, cols))
         if is_waiting:
             lines.append(waiting)
         return lines
 
     def _render_footer(self) -> str | None:
         if self._task_done.is_set():
-            return f"{_GREEN}Task completed. Press 'q' to return.{_RESET}"
+            return f"{_GREEN}Task completed. Press 'q' to return.{RESET}"
         if self._task_failed.is_set():
-            return f"{_RED}Task failed. Press 'q' to return.{_RESET}"
+            return f"{_RED}Task failed. Press 'q' to return.{RESET}"
         return None
 
     def _render_header_with(self, current_round: int) -> str:
         round_info = (
             f" Round {current_round}/{self.total_rounds}" if current_round > 0 else ""
         )
-        return f"{_BOLD}--- Task \"{self.slug}\"{round_info} (press 'q' to return) ---{_RESET}"
-
-
-def _split_complete_lines(text: str) -> list[str]:
-    lines = text.split("\n")
-    if not text.endswith("\n"):
-        lines = lines[:-1]
-    return [line for line in lines if line.strip()]
+        return f"{_BOLD}--- Task \"{self.slug}\"{round_info} (press 'q' to return) ---{RESET}"
 
 
 def _read_log_lines(path: Path, offset: int) -> list[str]:

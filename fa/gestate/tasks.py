@@ -6,6 +6,7 @@ from pathlib import Path
 
 import typer
 
+from fa.core.logview_parse import STREAM_JSON_TOOLS
 from fa.task.model import Task
 from fa.task.storage import (
     all_tasks,
@@ -27,14 +28,7 @@ def _find_new_parent_task(preexisting_ids: frozenset[int]) -> Task | None:
     return min(new_tasks, key=lambda t: t.id)
 
 
-def _extract_text_from_create_log(log_path: Path, tool: str) -> str:
-    try:
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    if tool not in {"claude", "ccr"}:
-        return text
-
+def _extract_text_from_jsonl(text: str) -> str:
     collected: list[str] = []
     for line in text.splitlines():
         try:
@@ -62,6 +56,16 @@ def _extract_text_from_create_log(log_path: Path, tool: str) -> str:
             ):
                 collected.append(block["text"])
     return "\n".join(collected)
+
+
+def _extract_text_from_create_log(log_path: Path, tool: str) -> str:
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if tool not in STREAM_JSON_TOOLS:
+        return text
+    return _extract_text_from_jsonl(text)
 
 
 def _parse_task_reference(text: str) -> tuple[int, Path | None] | None:
@@ -142,9 +146,12 @@ def _validate_task(task: Task) -> list[str]:
     issues: list[str] = []
     if task.status != "draft":
         issues.append(f"task {task.id} status is '{task.status}', expected 'draft'")
-    all_t = all_tasks()
-    has_children = bool(find_children(task.id))
-    need_spec = has_children or task.parent_id is None or task.parent_id not in all_t
+    tasks_dict = all_tasks()
+    children = find_children(task.id)
+    has_children = bool(children)
+    need_spec = (
+        has_children or task.parent_id is None or task.parent_id not in tasks_dict
+    )
     need_plan = not has_children
 
     if need_spec and not (task.path / "spec.md").exists():
@@ -152,8 +159,7 @@ def _validate_task(task: Task) -> list[str]:
     if need_plan and not (task.path / "plan.md").exists():
         issues.append(f"task {task.id} missing plan.md")
 
-    if has_children:
-        for child in all_t.values():
-            if child.parent_id == task.id and not (child.path / "plan.md").exists():
-                issues.append(f"subtask {child.id} missing plan.md")
+    for child in children:
+        if not (child.path / "plan.md").exists():
+            issues.append(f"subtask {child.id} missing plan.md")
     return issues

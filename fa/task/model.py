@@ -5,7 +5,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fa.core.config import STATUS_ALIASES, VALID_STATUSES, VALID_TRANSITIONS
+VALID_STATUSES = {"draft", "approved", "running", "failed", "completed"}
+
+VALID_TRANSITIONS: dict[str, set[str]] = {
+    "draft": {"approved"},
+    "approved": {"running", "completed"},
+    "running": {"completed", "failed"},
+    "failed": {"running", "completed"},
+    "completed": set(),
+}
+
+STATUS_ALIASES: dict[str, str] = {"pending": "draft"}
 
 _TIMESTAMP_FMT = "%Y-%m-%dT%H:%M:%S"
 

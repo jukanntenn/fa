@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from fa.core.logview_parse import _RESET
+from fa.core.logview_parse import RESET
 from fa.core.logview_viewer import (
     Entry,
     TaskViewer,
@@ -68,7 +68,7 @@ def test_viewer_persists_round_markers_and_parsed_entries() -> None:
 
         viewer = TaskViewer("task", total_rounds=1, tool="claude")
         viewer.start_round(1, raw_log, viewer_log)
-        viewer._drain_current_log()
+        viewer.drain()
         viewer.end_round(0.1)
 
         persisted = viewer_log.read_text(encoding="utf-8")
@@ -84,7 +84,7 @@ def test_body_lines_truncate_by_visible_width() -> None:
     entries = [Entry(round_index=1, text="\033[31mabcdef")]
 
     assert viewer._render_body_lines_from(entries, 3, is_waiting=False) == [
-        f"\033[31mabc{_RESET}"
+        f"\033[31mabc{RESET}"
     ]
 
 
@@ -95,7 +95,7 @@ def test_body_lines_include_ansi_safe_waiting_line() -> None:
 
     assert len(lines) == 1
     assert lines[0].startswith("\033[33mWaiting f")
-    assert lines[0].endswith(_RESET)
+    assert lines[0].endswith(RESET)
 
 
 def test_render_suppresses_chrome_on_tiny_terminal() -> None:
@@ -333,7 +333,7 @@ def test_viewer_drain_uses_codex_parser(tmp_path: Path) -> None:
     log.write_text("user\ncodex\nHello world\n", encoding="utf-8")
     viewer = TaskViewer("task", total_rounds=1, tool="codex")
     viewer.start_round(1, log)
-    viewer._drain_current_log()
+    viewer.drain()
     joined = "\n".join(e.text for e in viewer._entries)
     assert "[codex]" in joined
 
@@ -406,9 +406,9 @@ def test_viewer_drain_resets_offset_on_new_log(tmp_path: Path) -> None:
     log2.write_text("line2\n", encoding="utf-8")
     viewer = TaskViewer("task", total_rounds=2, tool="claude")
     viewer.start_round(1, log1)
-    viewer._drain_current_log()
+    viewer.drain()
     viewer.start_round(2, log2)
-    viewer._drain_current_log()
+    viewer.drain()
     joined = "\n".join(e.text for e in viewer._entries if "Round" not in e.text)
     assert "line1" in joined
     assert "line2" in joined

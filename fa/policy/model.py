@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -27,7 +28,7 @@ class Policy:
     agent: str = "rectifier"
 
     @classmethod
-    def from_dict(cls, data: dict, fallback_id: str) -> "Policy":
+    def from_dict(cls, data: dict[str, Any], fallback_id: str) -> Policy:
         scopes = data.get("scopes", {})
         report = data.get("report", {})
         return cls(
